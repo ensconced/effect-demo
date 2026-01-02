@@ -95,6 +95,7 @@ export class ImageService {
     let s3Uploaded = false;
     let cdnPublished = false;
     let metadataSaved = false;
+    let variants: Record<ImageSize, ImageVariant> = {} as Record<ImageSize, ImageVariant>;
 
     try {
       // Step 2: Extract dimensions
@@ -104,7 +105,7 @@ export class ImageService {
 
       // Step 3: Resize to all sizes (COMPLEX: parallel operation with partial failure handling)
       console.log('\nStep 2: Resizing to multiple sizes...');
-      const variants = await this.processor.resizeToAllSizes(
+      variants = await this.processor.resizeToAllSizes(
         validatedInput.file,
         dimensions,
         imageId,
@@ -188,7 +189,7 @@ export class ImageService {
         uploadedAt: new Date(),
         processedAt: new Date(),
         sizes: variants,
-        tags: validatedInput.tags,
+        tags: validatedInput.tags ?? [],
         userId: validatedInput.userId,
       };
 
