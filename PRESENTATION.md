@@ -364,7 +364,1455 @@ const processImage = Effect.gen(function* (_) {
 
 ---
 
-## Part 3: Additional Benefits (5 min)
+## Part 3: Complete Refactoring Guide - Incremental Approach (DETAILED)
+
+This section provides a comprehensive, step-by-step guide for refactoring this image processing service to use Effect TS. We'll approach this incrementally, layer by layer, building confidence and understanding as we go.
+
+### Philosophy: The Incremental Journey
+
+**Core Principle:** Don't try to refactor everything at once. Start at the edges, build confidence, and work your way toward the center until the entire program is one Effect.
+
+**The Journey:**
+1. **Phase 1:** Install Effect and create typed error classes (no behavior change yet)
+2. **Phase 2:** Refactor leaf operations (simple, single-purpose functions)
+3. **Phase 3:** Add resource management with acquireRelease
+4. **Phase 4:** Refactor parallel operations
+5. **Phase 5:** Add retry and resilience patterns
+6. **Phase 6:** Refactor the main pipeline to Effect.gen
+7. **Phase 7:** Implement Services and Dependency Injection
+8. **Phase 8:** The final program - one unified Effect
+
+---
+
+### Phase 1: Install Effect and Create Typed Errors
+
+**Learning Point:** Effect's type system makes errors first-class citizens. Instead of throwing errors, we'll create error types that Effect understands.
+
+#### Step 1.1: Install Effect
+
+```bash
+npm install effect
+```
+
+#### Step 1.2: Create Effect Error Classes
+
+**File:** `src/errors.ts` (new file)
+
+```typescript
+import { Data } from "effect";
+
+// Effect errors use Data.TaggedError for automatic tagging
+// The tag allows type-safe error handling with Effect.catchTag
+
+export class ValidationError extends Data.TaggedError("ValidationError")<{
+  message: string;
+  field?: string;
+  details?: unknown;
+}> {}
+
+export class ProcessingError extends Data.TaggedError("ProcessingError")<{
+  message: string;
+  stage?: string;
+  cause?: Error;
+}> {}
+
+export class StorageError extends Data.TaggedError("StorageError")<{
+  message: string;
+  location?: string;
+  cause?: Error;
+}> {}
+
+export class DatabaseError extends Data.TaggedError("DatabaseError")<{
+  message: string;
+  cause?: Error;
+}> {}
+
+export class NetworkError extends Data.TaggedError("NetworkError")<{
+  message: string;
+  retryable: boolean;
+  cause?: Error;
+}> {}
+
+export class ResourceError extends Data.TaggedError("ResourceError")<{
+  message: string;
+  resourceType?: string;
+  cause?: Error;
+}> {}
+```
+
+**Learning Points:**
+- `Data.TaggedError` creates discriminated union types
+- Each error has a `_tag` property (e.g., `"ValidationError"`)
+- This enables `Effect.catchTag("ValidationError", handler)` for type-safe error handling
+- Errors are immutable data structures, not thrown exceptions
+
+**Checkpoint:** Run `npm run type-check` - should still compile. No behavior changes yet!
+
+---
+
+### Phase 2: Refactor Leaf Operations
+
+**Learning Point:** Start with simple, single-purpose functions that don't depend on other operations. These are your "leaves" in the dependency tree.
+
+#### Step 2.1: Refactor File Validation
+
+**File:** `src/validation.ts`
+
+**Before:**
+```typescript
+export function validateUploadInput(
+  input: UploadImageInput,
+  config?: ProcessingConfig
+): UploadImageInput {
+  if (config?.shouldFailValidation) {
+    throw new ValidationError('Simulated validation failure');
+  }
+
+  if (!input.file || input.file.length === 0) {
+    throw new ValidationError('File is required', 'file');
+  }
+
+  if (input.file.length > MAX_FILE_SIZE) {
+    throw new ValidationError(
+      `File too large: ${input.file.length} bytes (max ${MAX_FILE_SIZE})`,
+      'file',
+      { size: input.file.length, max: MAX_FILE_SIZE }
+    );
+  }
+
+  // ... more validations
+
+  return input;
+}
+```
+
+**After:**
+```typescript
+import { Effect } from "effect";
+import { ValidationError } from "./errors.ts";
+
+export function validateUploadInput(
+  input: UploadImageInput,
+  config?: ProcessingConfig
+): Effect.Effect<UploadImageInput, ValidationError> {
+  return Effect.gen(function* (_) {
+    // Error injection
+    if (config?.shouldFailValidation) {
+      return yield* _(
+        Effect.fail(new ValidationError({
+          message: 'Simulated validation failure'
+        }))
+      );
+    }
+
+    // File presence check
+    if (!input.file || input.file.length === 0) {
+      return yield* _(
+        Effect.fail(new ValidationError({
+          message: 'File is required',
+          field: 'file'
+        }))
+      );
+    }
+
+    // File size check
+    if (input.file.length > MAX_FILE_SIZE) {
+      return yield* _(
+        Effect.fail(new ValidationError({
+          message: `File too large: ${input.file.length} bytes (max ${MAX_FILE_SIZE})`,
+          field: 'file',
+          details: { size: input.file.length, max: MAX_FILE_SIZE }
+        }))
+      );
+    }
+
+    // MIME type check
+    if (!ALLOWED_MIME_TYPES.includes(input.mimeType)) {
+      return yield* _(
+        Effect.fail(new ValidationError({
+          message: `Invalid MIME type: ${input.mimeType}`,
+          field: 'mimeType',
+          details: { allowed: ALLOWED_MIME_TYPES }
+        }))
+      );
+    }
+
+    // All validations passed
+    return input;
+  });
+}
+```
+
+**Learning Points:**
+- `Effect.Effect<A, E>` means: "A computation that succeeds with type A or fails with error type E"
+- `Effect.gen` is like async/await, but for Effects
+- `yield* _(effect)` unwraps the effect (like `await promise`)
+- `Effect.fail()` creates a failed Effect (like throwing, but typed)
+- Return type tells us exactly what can go wrong: `ValidationError`
+
+**Checkpoint:** Validation is now an Effect, but we haven't changed callers yet.
+
+---
+
+#### Step 2.2: Refactor Extract Dimensions
+
+**File:** `src/processing/image-processor.ts`
+
+**Before:**
+```typescript
+async extractDimensions(file: Buffer): Promise<ImageDimensions> {
+  await this.sleep(50);
+  const width = 1920 + Math.floor(Math.random() * 1000);
+  const height = 1080 + Math.floor(Math.random() * 1000);
+  validateImageDimensions(width, height);
+  return { width, height };
+}
+```
+
+**After:**
+```typescript
+import { Effect } from "effect";
+import { ProcessingError, ValidationError } from "../errors.ts";
+
+extractDimensions(
+  file: Buffer
+): Effect.Effect<ImageDimensions, ProcessingError | ValidationError> {
+  return Effect.gen(function* (_) {
+    // Simulate processing delay
+    yield* _(Effect.sleep("50 millis"));
+
+    // Simulate dimension extraction
+    const width = 1920 + Math.floor(Math.random() * 1000);
+    const height = 1080 + Math.floor(Math.random() * 1000);
+
+    // Validate (this is also an Effect now)
+    yield* _(validateImageDimensions(width, height));
+
+    return { width, height };
+  });
+}
+```
+
+**Learning Points:**
+- `Effect.sleep()` is a typed delay (better than `setTimeout`)
+- Union types in errors: `ProcessingError | ValidationError`
+- Errors compose automatically - calling an Effect that can fail adds its errors to our error type
+- No need for try-catch - errors are in the type signature
+
+---
+
+#### Step 2.3: Refactor Simple Storage Operations
+
+**File:** `src/storage/file-storage.ts`
+
+**Before (with manual retry):**
+```typescript
+async saveFile(
+  key: string,
+  data: Buffer,
+  config?: ProcessingConfig
+): Promise<void> {
+  const maxRetries = 3;
+  const baseDelay = 100;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (config?.shouldFailStorage && attempt === maxRetries) {
+        throw new StorageError('Simulated storage failure', 'file');
+      }
+
+      const filePath = path.join(this.storageDir, `${key}.bin`);
+      await fs.writeFile(filePath, data);
+      console.log(`Saved file: ${key}`);
+      return;
+    } catch (error) {
+      if (attempt < maxRetries) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+```
+
+**After (with Effect retry - we'll add this in Phase 5):**
+```typescript
+import { Effect } from "effect";
+import { StorageError } from "../errors.ts";
+
+saveFile(
+  key: string,
+  data: Buffer,
+  config?: ProcessingConfig
+): Effect.Effect<void, StorageError> {
+  return Effect.gen(function* (_) {
+    // Error injection
+    if (config?.shouldFailStorage) {
+      return yield* _(
+        Effect.fail(new StorageError({
+          message: 'Simulated storage failure',
+          location: 'file'
+        }))
+      );
+    }
+
+    const filePath = path.join(this.storageDir, `${key}.bin`);
+
+    // Wrap Node.js async operation in Effect
+    yield* _(
+      Effect.tryPromise({
+        try: () => fs.writeFile(filePath, data),
+        catch: (error) => new StorageError({
+          message: `Failed to save file: ${key}`,
+          location: 'file',
+          cause: error instanceof Error ? error : new Error(String(error))
+        })
+      })
+    );
+
+    yield* _(Effect.log(`Saved file: ${key}`));
+  });
+}
+```
+
+**Learning Points:**
+- `Effect.tryPromise()` converts Promise-based APIs to Effects
+- The `catch` function maps unknown errors to our typed errors
+- `Effect.log()` provides structured logging (better than console.log)
+- Retry logic will be added later as a separate concern (composability!)
+
+**Checkpoint:** Individual operations are now Effects. Time to connect them!
+
+---
+
+### Phase 3: Add Resource Management
+
+**Learning Point:** Resources that need cleanup (temp files, connections) should use `Effect.acquireRelease`. This guarantees cleanup even on errors or interruptions.
+
+#### Step 3.1: Manage Temp Files with acquireRelease
+
+**File:** `src/processing/image-processor.ts`
+
+**Before:**
+```typescript
+async resizeSingle(...): Promise<ImageVariant> {
+  const filePath = path.join(this.tempDir, `${imageId}-${size}.jpg`);
+  await fs.writeFile(filePath, Buffer.alloc(resizedFileSize, 0));
+
+  // Problem: if something fails later, this file is orphaned!
+
+  return { size, dimensions, fileSize, filePath };
+}
+```
+
+**After:**
+```typescript
+import { Effect } from "effect";
+
+resizeSingle(
+  file: Buffer,
+  size: ImageSize,
+  originalDimensions: ImageDimensions,
+  imageId: string,
+  config?: ProcessingConfig
+): Effect.Effect<ImageVariant, ProcessingError> {
+  const filePath = path.join(this.tempDir, `${imageId}-${size}.jpg`);
+
+  // Create the temp file with automatic cleanup
+  return Effect.acquireRelease(
+    // ACQUIRE: Create the temp file
+    Effect.gen(function* (_) {
+      yield* _(Effect.log(`Creating temp file: ${size}`));
+
+      // ... do resize logic ...
+      const resizedFileSize = Math.floor(file.length * 0.7);
+
+      yield* _(
+        Effect.tryPromise({
+          try: () => fs.writeFile(filePath, Buffer.alloc(resizedFileSize, 0)),
+          catch: (error) => new ProcessingError({
+            message: `Failed to create temp file for ${size}`,
+            stage: 'resize',
+            cause: error instanceof Error ? error : undefined
+          })
+        })
+      );
+
+      return { size, dimensions, fileSize: resizedFileSize, filePath };
+    }),
+
+    // RELEASE: Clean up the temp file
+    // This runs even if downstream operations fail!
+    (variant) =>
+      Effect.gen(function* (_) {
+        yield* _(Effect.log(`Cleaning up temp file: ${variant.size}`));
+
+        yield* _(
+          Effect.tryPromise({
+            try: () => fs.unlink(variant.filePath),
+            catch: () => {
+              // Log but don't fail on cleanup errors
+              console.warn(`Failed to cleanup temp file: ${variant.filePath}`);
+            }
+          })
+        );
+      })
+  );
+}
+```
+
+**Learning Points:**
+- `acquireRelease(acquire, release)` is the resource pattern
+- `acquire` runs to create the resource
+- `release` ALWAYS runs, even on errors or interruptions
+- No more orphaned temp files!
+- Composable: you can nest multiple resources
+
+**Advanced Pattern - Scoped Resources:**
+
+```typescript
+// For multiple temp files with automatic cleanup
+const resizeAllWithCleanup = Effect.gen(function* (_) {
+  // All temp files created in this scope will be cleaned up together
+  const thumbnail = yield* _(resizeSingle(file, 'thumbnail', ...));
+  const small = yield* _(resizeSingle(file, 'small', ...));
+  const medium = yield* _(resizeSingle(file, 'medium', ...));
+  const large = yield* _(resizeSingle(file, 'large', ...));
+
+  // If we fail here, ALL four files are cleaned up automatically
+  yield* _(uploadToS3(thumbnail, small, medium, large));
+
+  return { thumbnail, small, medium, large };
+}).pipe(
+  // Scope ensures all acquireRelease cleanup happens
+  Effect.scoped
+);
+```
+
+**Checkpoint:** Temp files now have guaranteed cleanup!
+
+---
+
+### Phase 4: Refactor Parallel Operations
+
+**Learning Point:** `Effect.all` handles parallel operations elegantly with different failure modes.
+
+#### Step 4.1: Parallel Resize with Effect.all
+
+**File:** `src/processing/image-processor.ts`
+
+**Before (Promise.allSettled mess):**
+```typescript
+async resizeToAllSizes(...): Promise<Record<ImageSize, ImageVariant>> {
+  const sizes: ImageSize[] = ['thumbnail', 'small', 'medium', 'large'];
+
+  const results = await Promise.allSettled(
+    sizes.map((size) => this.resizeSingle(file, size, ...))
+  );
+
+  // Manual result interpretation
+  const succeeded: ImageVariant[] = [];
+  const failed: Array<{ size: ImageSize; error: any }> = [];
+
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].status === 'fulfilled') {
+      succeeded.push((results[i] as any).value);
+    } else {
+      failed.push({ size: sizes[i], error: (results[i] as any).reason });
+    }
+  }
+
+  if (failed.length > 0) {
+    // Clean up successful ones (but this can fail too!)
+    await this.cleanupFiles(succeeded.map(v => v.filePath));
+    throw new Error(`Failed ${failed.length} sizes`);
+  }
+
+  // ... convert to record ...
+}
+```
+
+**After (Effect.all with different modes):**
+```typescript
+import { Effect, Array as EffectArray } from "effect";
+
+resizeToAllSizes(
+  file: Buffer,
+  originalDimensions: ImageDimensions,
+  imageId: string,
+  config?: ProcessingConfig
+): Effect.Effect<Record<ImageSize, ImageVariant>, ProcessingError> {
+  const sizes: ImageSize[] = ['thumbnail', 'small', 'medium', 'large'];
+
+  return Effect.gen(function* (_) {
+    yield* _(Effect.log(`Resizing to ${sizes.length} sizes in parallel...`));
+
+    // Option 1: Fail if ANY fails (short-circuit)
+    // This is the default mode
+    const variants = yield* _(
+      Effect.all(
+        sizes.map(size =>
+          this.resizeSingle(file, size, originalDimensions, imageId, config)
+        ),
+        { concurrency: 4 } // Control parallelism
+      )
+    );
+
+    // Convert array to record
+    const variantsRecord: Record<ImageSize, ImageVariant> = {} as any;
+    for (const variant of variants) {
+      variantsRecord[variant.size] = variant;
+    }
+
+    return variantsRecord;
+  });
+}
+
+// Alternative: Collect all results (successes and failures)
+resizeToAllSizesValidate(
+  file: Buffer,
+  originalDimensions: ImageDimensions,
+  imageId: string,
+  config?: ProcessingConfig
+): Effect.Effect<
+  Record<ImageSize, ImageVariant>,
+  ProcessingError,
+  never
+> {
+  const sizes: ImageSize[] = ['thumbnail', 'small', 'medium', 'large'];
+
+  return Effect.gen(function* (_) {
+    // "validate" mode collects all results
+    const results = yield* _(
+      Effect.all(
+        sizes.map(size =>
+          this.resizeSingle(file, size, originalDimensions, imageId, config)
+        ),
+        { mode: "validate" }
+      )
+    );
+
+    // results is an array of Exit values
+    // We can inspect each one
+    const succeeded: ImageVariant[] = [];
+    const failed: ProcessingError[] = [];
+
+    for (const result of results) {
+      if (result._tag === "Success") {
+        succeeded.push(result.value);
+      } else {
+        failed.push(result.cause.failure);
+      }
+    }
+
+    if (failed.length > 0) {
+      return yield* _(
+        Effect.fail(new ProcessingError({
+          message: `Failed to resize ${failed.length}/${sizes.length} sizes`,
+          stage: 'resize',
+          cause: failed[0]
+        }))
+      );
+    }
+
+    // Convert to record
+    const variantsRecord: Record<ImageSize, ImageVariant> = {} as any;
+    for (const variant of succeeded) {
+      variantsRecord[variant.size] = variant;
+    }
+
+    return variantsRecord;
+  });
+}
+```
+
+**Learning Points:**
+- `Effect.all([...])` runs effects in parallel
+- `{ concurrency: N }` limits parallelism
+- `{ mode: "validate" }` collects all results instead of failing fast
+- Cleanup is automatic via `acquireRelease` from Phase 3!
+- Type-safe: compiler knows all possible errors
+
+**Parallel Modes:**
+1. **Default (fail-fast):** Stop on first error, cancel others
+2. **`{ mode: "validate" }`:** Collect all results (successes and failures)
+3. **`{ mode: "either" }`:** Return first success OR all failures
+4. **`{ concurrency: N }`:** Limit concurrent operations
+
+**Checkpoint:** Parallel operations are now clean and composable!
+
+---
+
+### Phase 5: Add Retry and Resilience Patterns
+
+**Learning Point:** Retry, timeout, and circuit breaker are separate concerns that compose with your business logic.
+
+#### Step 5.1: Add Retry to Network Operations
+
+**File:** `src/storage/s3-storage.ts`
+
+**Before (manual retry in every function):**
+```typescript
+async uploadFile(filePath: string, s3Key: string, config?: ProcessingConfig): Promise<string> {
+  const maxRetries = 3;
+  const baseDelay = 100;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // ... upload logic ...
+      return s3Url;
+    } catch (error) {
+      if (attempt < maxRetries) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+```
+
+**After (declarative retry):**
+```typescript
+import { Effect, Schedule } from "effect";
+import { StorageError, NetworkError } from "../errors.ts";
+
+uploadFile(
+  filePath: string,
+  s3Key: string,
+  config?: ProcessingConfig
+): Effect.Effect<string, StorageError | NetworkError> {
+  // Define the core operation (no retry logic!)
+  const upload = Effect.gen(function* (_) {
+    if (config?.shouldFailS3) {
+      return yield* _(
+        Effect.fail(new NetworkError({
+          message: 'Simulated S3 failure',
+          retryable: true
+        }))
+      );
+    }
+
+    // Read file
+    const fileData = yield* _(
+      Effect.tryPromise({
+        try: () => fs.readFile(filePath),
+        catch: (error) => new StorageError({
+          message: `Failed to read file for S3 upload: ${filePath}`,
+          location: 'file',
+          cause: error instanceof Error ? error : undefined
+        })
+      })
+    );
+
+    // Simulate S3 upload
+    yield* _(Effect.sleep("200 millis"));
+
+    const s3Url = `https://s3.amazonaws.com/bucket/${s3Key}`;
+    yield* _(Effect.log(`Uploaded to S3: ${s3Key}`));
+
+    return s3Url;
+  });
+
+  // Add retry policy separately - this is composable!
+  const retryPolicy = Schedule.exponential("100 millis").pipe(
+    Schedule.union(Schedule.recurs(3)), // Max 3 retries
+    Schedule.jittered // Add random jitter to prevent thundering herd
+  );
+
+  return upload.pipe(
+    Effect.retry(retryPolicy),
+    Effect.tap(() => Effect.log("Upload completed (possibly after retries)"))
+  );
+}
+```
+
+**Learning Points:**
+- Retry logic is separate from business logic
+- `Schedule` is a composable retry strategy
+- `Schedule.exponential()` - exponential backoff
+- `Schedule.recurs(N)` - maximum retry attempts
+- `Schedule.jittered` - adds randomness to prevent coordination
+- Can easily swap retry strategies without changing upload logic
+
+**Advanced Retry Strategies:**
+
+```typescript
+// Retry only specific errors
+const retryOnlyNetwork = upload.pipe(
+  Effect.retry({
+    schedule: retryPolicy,
+    while: (error) => error._tag === "NetworkError" && error.retryable
+  })
+);
+
+// Different retry for different errors
+const customRetry = upload.pipe(
+  Effect.catchTag("NetworkError", (error) =>
+    error.retryable
+      ? upload.pipe(Effect.retry(Schedule.recurs(5)))
+      : Effect.fail(error)
+  )
+);
+
+// Timeout + Retry
+const withTimeout = upload.pipe(
+  Effect.timeout("5 seconds"),
+  Effect.retry(retryPolicy)
+);
+
+// Circuit breaker (fail fast after repeated failures)
+import { CircuitBreaker } from "@effect/experimental";
+
+const withCircuitBreaker = upload.pipe(
+  CircuitBreaker.withCircuitBreaker({
+    failureThreshold: 5,     // Open after 5 failures
+    resetTimeout: "1 minute" // Try again after 1 minute
+  })
+);
+```
+
+**Checkpoint:** Retry logic is now declarative and composable!
+
+---
+
+#### Step 5.2: Apply Retry to All Network Operations
+
+Apply the same pattern to:
+- `src/storage/cdn-publisher.ts` - CDN publishing with retry
+- `src/storage/metadata-storage.ts` - Database operations with retry
+
+**Learning Point:** Notice how we never duplicated the retry code. Each operation just declares "what" should be retried, and Effect handles "how".
+
+---
+
+### Phase 6: Refactor Main Pipeline to Effect.gen
+
+**Learning Point:** Now that all individual operations are Effects, we can compose them into a pipeline. This is where the magic happens - automatic error propagation, resource cleanup, and transaction-like behavior.
+
+#### Step 6.1: Convert processImage to Effect
+
+**File:** `src/services/image-service.ts`
+
+**Before (275 lines of nested try-catch and manual rollback):**
+```typescript
+async processImage(
+  input: UploadImageInput,
+  config?: ProcessingConfig
+): Promise<ImageMetadata> {
+  let fileStorageSaved = false;
+  let s3Uploaded = false;
+  let cdnPublished = false;
+
+  try {
+    const validated = validateUploadInput(input, config);
+    // ... 50+ lines of sequential operations ...
+
+    try {
+      await this.fileStorage.saveFile(...);
+      fileStorageSaved = true;
+    } catch (error) {
+      throw new StorageError(...);
+    }
+
+    // ... repeat for each step ...
+
+  } catch (error) {
+    // 80+ lines of manual rollback logic
+    if (cdnPublished) { /* rollback CDN */ }
+    if (s3Uploaded) { /* rollback S3 */ }
+    if (fileStorageSaved) { /* rollback file */ }
+    throw error;
+  }
+}
+```
+
+**After (clean pipeline with automatic rollback):**
+```typescript
+import { Effect, Array as EffectArray } from "effect";
+import { randomUUID } from "crypto";
+
+processImage(
+  input: UploadImageInput,
+  config?: ProcessingConfig
+): Effect.Effect<
+  ImageMetadata,
+  ValidationError | ProcessingError | StorageError | DatabaseError
+> {
+  return Effect.gen(function* (_) {
+    yield* _(Effect.log("\n=== Starting Image Processing Pipeline ==="));
+
+    // Step 1: Validate
+    const validatedInput = yield* _(validateUploadInput(input, config));
+    const imageId = randomUUID();
+
+    // Step 2: Extract dimensions
+    yield* _(Effect.log("Step 1: Extracting dimensions..."));
+    const dimensions = yield* _(
+      this.processor.extractDimensions(validatedInput.file)
+    );
+    yield* _(Effect.log(`✓ Dimensions: ${dimensions.width}x${dimensions.height}`));
+
+    // Step 3: Resize to all sizes (parallel!)
+    yield* _(Effect.log("\nStep 2: Resizing to multiple sizes..."));
+    const variants = yield* _(
+      this.processor.resizeToAllSizes(
+        validatedInput.file,
+        dimensions,
+        imageId,
+        config
+      )
+    );
+    yield* _(Effect.log(`✓ Created ${Object.keys(variants).length} variants`));
+
+    // Step 4: Optimize (sequential, but errors don't fail the whole operation)
+    yield* _(Effect.log("\nStep 3: Optimizing images..."));
+    yield* _(
+      Effect.all(
+        Object.entries(variants).map(([size, variant]) =>
+          this.processor.optimize(variant.filePath, config).pipe(
+            Effect.catchAll((error) =>
+              Effect.log(`Warning: Failed to optimize ${size}, continuing`)
+            )
+          )
+        ),
+        { concurrency: 4 }
+      )
+    );
+
+    // Step 5: Save to file storage (with rollback on failure)
+    yield* _(Effect.log("\nStep 4: Saving to file storage..."));
+    yield* _(
+      this.fileStorage.saveFile(
+        `${imageId}-original`,
+        validatedInput.file,
+        config
+      )
+    );
+    yield* _(Effect.log("✓ Saved to file storage"));
+
+    // Step 6: Upload to S3 (with automatic retry from Phase 5)
+    yield* _(Effect.log("\nStep 5: Uploading to S3..."));
+    yield* _(
+      Effect.all(
+        Object.entries(variants).map(([size, variant]) =>
+          Effect.gen(function* (_) {
+            const s3Key = `images/${imageId}/${size}.jpg`;
+            const s3Url = yield* _(
+              this.s3Storage.uploadFile(variant.filePath, s3Key, config)
+            );
+            variant.s3Url = s3Url;
+            return { size: size as ImageSize, url: s3Url };
+          })
+        ),
+        { concurrency: 4 }
+      )
+    );
+    yield* _(Effect.log(`✓ Uploaded ${Object.keys(variants).length} files to S3`));
+
+    // Step 7: Publish to CDN
+    yield* _(Effect.log("\nStep 6: Publishing to CDN..."));
+    yield* _(
+      Effect.all(
+        Object.entries(variants).map(([size, variant]) =>
+          Effect.gen(function* (_) {
+            if (!variant.s3Url) return;
+            const cdnKey = `images/${imageId}/${size}.jpg`;
+            const cdnUrl = yield* _(
+              this.cdnPublisher.publishFile(variant.s3Url, cdnKey, config)
+            );
+            variant.cdnUrl = cdnUrl;
+          })
+        ),
+        { concurrency: 4 }
+      )
+    );
+    yield* _(Effect.log("✓ Published to CDN"));
+
+    // Step 8: Save metadata
+    yield* _(Effect.log("\nStep 7: Saving metadata..."));
+    const metadata: ImageMetadata = {
+      id: imageId,
+      originalName: validatedInput.originalName,
+      mimeType: validatedInput.mimeType,
+      fileSize: validatedInput.file.length,
+      dimensions,
+      uploadedAt: new Date(),
+      processedAt: new Date(),
+      sizes: variants,
+      tags: validatedInput.tags,
+      userId: validatedInput.userId,
+    };
+
+    yield* _(this.metadataStorage.save(metadata, config));
+    yield* _(Effect.log("✓ Metadata saved"));
+
+    yield* _(Effect.log("\n=== Image Processing Complete ===\n"));
+    return metadata;
+  }).pipe(
+    // Add automatic rollback on ANY error
+    Effect.onError((cause) =>
+      Effect.gen(function* (_) {
+        yield* _(Effect.log("\n!!! Error during processing, rolling back !!!"));
+
+        // Rollback in reverse order
+        // Each rollback is best-effort (catchAll prevents rollback errors from failing)
+        yield* _(
+          Effect.all([
+            this.metadataStorage.delete(imageId).pipe(
+              Effect.catchAll(() => Effect.log("Rollback: Metadata not found"))
+            ),
+            Effect.all(
+              Object.keys(variants).map(size =>
+                this.cdnPublisher.invalidate(`images/${imageId}/${size}.jpg`).pipe(
+                  Effect.catchAll(() => Effect.log(`Rollback: CDN ${size} already removed`))
+                )
+              )
+            ),
+            Effect.all(
+              Object.keys(variants).map(size =>
+                this.s3Storage.deleteFile(`images/${imageId}/${size}.jpg`).pipe(
+                  Effect.catchAll(() => Effect.log(`Rollback: S3 ${size} already removed`))
+                )
+              )
+            ),
+            this.fileStorage.deleteFile(`${imageId}-original`).pipe(
+              Effect.catchAll(() => Effect.log("Rollback: File already removed"))
+            )
+          ], { concurrency: "unbounded" })
+        );
+
+        yield* _(Effect.log("Rollback complete"));
+      })
+    )
+  );
+}
+```
+
+**Learning Points:**
+- **No manual state tracking:** No more `fileStorageSaved = true` flags!
+- **Automatic error propagation:** Any failure stops the pipeline and triggers rollback
+- **Composable:** Each step is an Effect that can have retry, timeout, etc.
+- **Type-safe:** The return type shows all possible errors
+- **Rollback is declarative:** `Effect.onError()` handles cleanup
+- **Best-effort rollback:** Each rollback operation has `catchAll` so rollback failures don't cascade
+
+**Advanced: Transaction-like Behavior with Compensations**
+
+```typescript
+import { Compensated } from "@effect/experimental";
+
+const processImageWithCompensations = Effect.gen(function* (_) {
+  // Each step registers its compensation (rollback action)
+  const fileKey = yield* _(
+    Compensated.make(
+      this.fileStorage.saveFile(`${imageId}-original`, file, config),
+      () => this.fileStorage.deleteFile(`${imageId}-original`)
+    )
+  );
+
+  const s3Urls = yield* _(
+    Compensated.make(
+      uploadAllToS3(variants, imageId, config),
+      (urls) => deleteAllFromS3(urls)
+    )
+  );
+
+  const cdnUrls = yield* _(
+    Compensated.make(
+      publishAllToCDN(variants, imageId, config),
+      (urls) => invalidateAllOnCDN(urls)
+    )
+  );
+
+  const metadata = yield* _(
+    Compensated.make(
+      this.metadataStorage.save(metadataToSave, config),
+      (saved) => this.metadataStorage.delete(saved.id)
+    )
+  );
+
+  return metadata;
+}).pipe(
+  Compensated.commit // Run all compensations on error
+);
+```
+
+**Checkpoint:** Main pipeline is now a clean, composable Effect with automatic rollback!
+
+---
+
+### Phase 7: Services and Dependency Injection
+
+**Learning Point:** Hard-coded dependencies make testing impossible. Effect's Service pattern provides compile-time dependency injection.
+
+#### Step 7.1: Define Service Interfaces
+
+**File:** `src/services/image-processor.service.ts` (new)
+
+```typescript
+import { Context, Effect, Layer } from "effect";
+import type { ImageDimensions, ImageSize, ImageVariant, ProcessingConfig } from "../types.ts";
+import { ProcessingError, ValidationError } from "../errors.ts";
+
+// Define the service interface (what operations are available)
+export class ImageProcessorService extends Context.Tag("ImageProcessorService")<
+  ImageProcessorService,
+  {
+    readonly extractDimensions: (
+      file: Buffer
+    ) => Effect.Effect<ImageDimensions, ProcessingError | ValidationError>;
+
+    readonly resizeToAllSizes: (
+      file: Buffer,
+      originalDimensions: ImageDimensions,
+      imageId: string,
+      config?: ProcessingConfig
+    ) => Effect.Effect<Record<ImageSize, ImageVariant>, ProcessingError>;
+
+    readonly optimize: (
+      filePath: string,
+      config?: ProcessingConfig
+    ) => Effect.Effect<void, ProcessingError>;
+  }
+>() {}
+```
+
+#### Step 7.2: Implement the Service
+
+**File:** `src/services/image-processor.implementation.ts` (new)
+
+```typescript
+import { Effect, Layer } from "effect";
+import { ImageProcessorService } from "./image-processor.service.ts";
+// ... implementation code from Phase 2-5 ...
+
+// Live implementation (actual image processing)
+export const ImageProcessorLive = Layer.succeed(
+  ImageProcessorService,
+  {
+    extractDimensions: (file: Buffer) =>
+      Effect.gen(function* (_) {
+        yield* _(Effect.sleep("50 millis"));
+        const width = 1920 + Math.floor(Math.random() * 1000);
+        const height = 1080 + Math.floor(Math.random() * 1000);
+        yield* _(validateImageDimensions(width, height));
+        return { width, height };
+      }),
+
+    resizeToAllSizes: (file, dimensions, imageId, config) =>
+      Effect.gen(function* (_) {
+        // ... implementation from Phase 4 ...
+      }),
+
+    optimize: (filePath, config) =>
+      Effect.gen(function* (_) {
+        // ... implementation ...
+      })
+  }
+);
+
+// Test implementation (mocked)
+export const ImageProcessorTest = Layer.succeed(
+  ImageProcessorService,
+  {
+    extractDimensions: (file: Buffer) =>
+      Effect.succeed({ width: 1920, height: 1080 }),
+
+    resizeToAllSizes: (file, dimensions, imageId, config) =>
+      Effect.succeed({
+        thumbnail: { size: 'thumbnail', dimensions: { width: 150, height: 150 }, fileSize: 1000, filePath: '/tmp/thumb.jpg' },
+        // ... mock other sizes ...
+      }),
+
+    optimize: (filePath, config) =>
+      Effect.void // No-op for tests
+  }
+);
+```
+
+#### Step 7.3: Use Services in Pipeline
+
+**File:** `src/services/image-service.ts`
+
+```typescript
+import { Effect } from "effect";
+import { ImageProcessorService } from "./image-processor.service.ts";
+import { FileStorageService } from "./file-storage.service.ts";
+import { S3StorageService } from "./s3-storage.service.ts";
+// ... other service imports ...
+
+processImage(
+  input: UploadImageInput,
+  config?: ProcessingConfig
+): Effect.Effect<
+  ImageMetadata,
+  ValidationError | ProcessingError | StorageError | DatabaseError,
+  ImageProcessorService | FileStorageService | S3StorageService | CDNPublisherService | MetadataStorageService
+  // ^^^ Dependencies are in the type!
+> {
+  return Effect.gen(function* (_) {
+    // Access services via yield
+    const processor = yield* _(ImageProcessorService);
+    const fileStorage = yield* _(FileStorageService);
+    const s3Storage = yield* _(S3StorageService);
+    const cdnPublisher = yield* _(CDNPublisherService);
+    const metadataStorage = yield* _(MetadataStorageService);
+
+    // Now use them exactly as before
+    const validatedInput = yield* _(validateUploadInput(input, config));
+    const imageId = randomUUID();
+
+    const dimensions = yield* _(processor.extractDimensions(validatedInput.file));
+    const variants = yield* _(processor.resizeToAllSizes(validatedInput.file, dimensions, imageId, config));
+
+    // ... rest of pipeline ...
+
+    return metadata;
+  });
+}
+```
+
+#### Step 7.4: Wire Up Dependencies with Layers
+
+**File:** `src/index.ts`
+
+**Before (manual wiring):**
+```typescript
+const processor = new ImageProcessor('./data/temp');
+const fileStorage = new FileStorage('./data/files');
+const s3Storage = new S3Storage();
+const cdnPublisher = new CDNPublisher();
+const metadataStorage = new MetadataStorage('./data/db.json');
+
+const imageService = new ImageService(
+  processor,
+  fileStorage,
+  s3Storage,
+  cdnPublisher,
+  metadataStorage
+);
+
+await imageService.initialize();
+```
+
+**After (declarative layers):**
+```typescript
+import { Effect, Layer } from "effect";
+import { ImageProcessorLive } from "./services/image-processor.implementation.ts";
+import { FileStorageLive } from "./services/file-storage.implementation.ts";
+// ... other implementations ...
+
+// Define application layers
+const AppLive = Layer.mergeAll(
+  ImageProcessorLive,
+  FileStorageLive,
+  S3StorageLive,
+  CDNPublisherLive,
+  MetadataStorageLive
+);
+
+// For testing, swap to test implementations
+const AppTest = Layer.mergeAll(
+  ImageProcessorTest,
+  FileStorageTest,
+  S3StorageTest,
+  CDNPublisherTest,
+  MetadataStorageTest
+);
+
+// Run the application
+const program = Effect.gen(function* (_) {
+  // processImage now has all dependencies available
+  const result = yield* _(processImage(uploadInput, config));
+  return result;
+}).pipe(
+  Effect.provide(AppLive) // Provide the live implementations
+);
+
+// Execute
+await Effect.runPromise(program);
+
+// For testing
+const testProgram = processImage(uploadInput, config).pipe(
+  Effect.provide(AppTest) // Swap to test implementations!
+);
+```
+
+**Learning Points:**
+- **Services are in the type system:** `Effect<A, E, R>` where R = requirements (dependencies)
+- **Layers compose:** `Layer.mergeAll()` combines multiple service implementations
+- **Easy to swap:** Change from `AppLive` to `AppTest` with one line
+- **Compile-time safety:** Missing dependency = compile error
+- **No more manual initialization:** Layers handle initialization order
+
+**Advanced - Layer Dependencies:**
+
+```typescript
+// S3 depends on Config
+const S3StorageLive = Layer.effect(
+  S3StorageService,
+  Effect.gen(function* (_) {
+    const config = yield* _(ConfigService);
+
+    return {
+      uploadFile: (path, key, cfg) => /* implementation using config */
+    };
+  })
+).pipe(
+  Layer.provide(ConfigLive) // S3 requires Config
+);
+
+// CDN depends on S3 and Config
+const CDNPublisherLive = Layer.effect(
+  CDNPublisherService,
+  Effect.gen(function* (_) {
+    const s3 = yield* _(S3StorageService);
+    const config = yield* _(ConfigService);
+
+    return {
+      publishFile: (s3Url, cdnKey, cfg) => /* implementation */
+    };
+  })
+).pipe(
+  Layer.provide(Layer.merge(S3StorageLive, ConfigLive))
+);
+
+// Effect automatically resolves the dependency graph!
+```
+
+**Checkpoint:** Dependencies are now managed by the type system! Testing is trivial.
+
+---
+
+### Phase 8: The Final Program - One Unified Effect
+
+**Learning Point:** At this point, your entire application is one Effect value. The `main` function is just composing Effects and running them.
+
+#### Step 8.1: Complete Application as Effect
+
+**File:** `src/index.ts` (final version)
+
+```typescript
+import { Effect, Layer, Console, LogLevel, Logger } from "effect";
+import express from "express";
+import { processImage } from "./services/image-service.ts";
+import { AppLive } from "./layers/app.layer.ts";
+import type { UploadImageInput, ProcessingConfig } from "./types.ts";
+
+// ============================================================
+// The entire application is now ONE Effect
+// ============================================================
+
+const ServerPort = 3000;
+
+// Define the main application logic
+const app = Effect.gen(function* (_) {
+  yield* _(Effect.log("Starting Effect-based Image Processing Service"));
+
+  // Create Express app
+  const expressApp = express();
+  expressApp.use(express.json());
+
+  // Define routes as Effects
+  expressApp.post('/api/images', (req, res) => {
+    // Parse request
+    const uploadInput: UploadImageInput = {
+      file: Buffer.from(req.body.file, 'base64'),
+      originalName: req.body.originalName,
+      mimeType: req.body.mimeType,
+      userId: req.body.userId,
+      tags: req.body.tags
+    };
+
+    const config: ProcessingConfig = {
+      shouldFailCDN: (req.query.fail as string)?.includes('cdn'),
+      shouldFailStorage: (req.query.fail as string)?.includes('storage'),
+      // ... parse other failure flags ...
+    };
+
+    // Process image (entire pipeline is one Effect)
+    const pipeline = processImage(uploadInput, config).pipe(
+      Effect.timeout("30 seconds"), // Add timeout at the top level
+      Effect.tap((metadata) =>
+        Effect.log(`Image processed successfully: ${metadata.id}`)
+      ),
+      Effect.tapError((error) =>
+        Effect.log(`Image processing failed: ${error._tag} - ${error.message}`)
+      )
+    );
+
+    // Run the Effect
+    Effect.runPromise(pipeline.pipe(Effect.provide(AppLive)))
+      .then((metadata) => {
+        res.json({ success: true, data: metadata });
+      })
+      .catch((error) => {
+        // All errors are typed, but for HTTP response we handle generically
+        res.status(error._tag === "ValidationError" ? 400 : 500).json({
+          success: false,
+          error: {
+            type: error._tag,
+            message: error.message,
+            details: error
+          }
+        });
+      });
+  });
+
+  // Start server
+  yield* _(
+    Effect.async<void, never>((resume) => {
+      expressApp.listen(ServerPort, () => {
+        console.log(`Server listening on port ${ServerPort}`);
+        resume(Effect.void);
+      });
+    })
+  );
+
+  yield* _(Effect.log("Server started successfully"));
+
+  // Keep running forever
+  yield* _(Effect.never);
+});
+
+// ============================================================
+// Configure logging
+// ============================================================
+const LoggerLive = Logger.replace(
+  Logger.defaultLogger,
+  Logger.make(({ message, logLevel }) => {
+    const timestamp = new Date().toISOString();
+    const level = logLevel.label.toUpperCase();
+    console.log(`[${timestamp}] ${level}: ${message}`);
+  })
+);
+
+// ============================================================
+// Main program
+// ============================================================
+const program = app.pipe(
+  Effect.provide(AppLive),
+  Effect.provide(LoggerLive),
+  Logger.withMinimumLogLevel(LogLevel.Debug)
+);
+
+// Run it!
+Effect.runPromise(program).catch((error) => {
+  console.error("Fatal error:", error);
+  process.exit(1);
+});
+```
+
+**Learning Points:**
+- **The entire app is one Effect value** (`program`)
+- **All concerns are composed:**
+  - Business logic (processImage)
+  - Retry (in individual operations)
+  - Timeout (at route level)
+  - Logging (via LoggerLive layer)
+  - Dependency injection (via AppLive layer)
+- **Effect.runPromise()** is the only place we run an Effect
+- **Type-safe top to bottom:** Every operation knows its errors and dependencies
+
+#### Step 8.2: Enhanced Main with Graceful Shutdown
+
+```typescript
+import { Effect, Layer, Runtime } from "effect";
+
+// Create a Runtime with our layers
+const AppRuntime = Layer.toRuntime(Layer.merge(AppLive, LoggerLive));
+
+// Graceful shutdown support
+const main = Effect.gen(function* (_) {
+  const runtime = yield* _(AppRuntime);
+
+  // Handle shutdown signals
+  const shutdown = Effect.gen(function* (_) {
+    yield* _(Effect.log("Shutting down gracefully..."));
+
+    // Close all resources (automatic via Layers!)
+    yield* _(Effect.log("All resources cleaned up"));
+
+    process.exit(0);
+  });
+
+  process.on('SIGINT', () => {
+    Effect.runPromise(shutdown.pipe(Effect.provide(runtime)));
+  });
+
+  process.on('SIGTERM', () => {
+    Effect.runPromise(shutdown.pipe(Effect.provide(runtime)));
+  });
+
+  // Run the app
+  yield* _(app);
+});
+
+Effect.runPromise(main);
+```
+
+**Learning Points:**
+- **Runtime:** Pre-wired dependency graph for multiple Effect executions
+- **Graceful shutdown:** Cleanup is automatic
+- **Resource safety:** All `acquireRelease` cleanup happens on shutdown
+
+**Checkpoint:** DONE! The entire application is now one composable Effect.
+
+---
+
+## Summary: What We Achieved
+
+### Before (Vanilla TypeScript):
+- ❌ 275 lines of nested try-catch
+- ❌ Manual state tracking (7 boolean flags)
+- ❌ Manual rollback logic (80+ lines)
+- ❌ Duplicated retry code (3 copies)
+- ❌ Resource leaks possible
+- ❌ Hard-coded dependencies
+- ❌ No type safety for errors
+- ❌ Hard to test
+
+### After (Effect TS):
+- ✅ ~100 lines of pipeline code
+- ✅ No manual state tracking
+- ✅ Automatic rollback via `onError`
+- ✅ Zero duplicated retry code
+- ✅ Guaranteed resource cleanup
+- ✅ Compile-time dependency injection
+- ✅ All errors in type signature
+- ✅ Trivial to test (swap layers)
+
+### Key Refactoring Principles
+
+1. **Start Small:** Refactor leaf functions first (validation, simple operations)
+2. **Build Up:** Compose small Effects into larger Effects
+3. **Add Concerns Separately:** Retry, timeout, logging are separate from business logic
+4. **Resources First:** Use `acquireRelease` early to prevent leaks
+5. **Services Last:** Add dependency injection when you understand the boundaries
+6. **One Effect:** Eventually, your main function is just one Effect value
+
+### The Power of Composition
+
+Notice how we built up complexity:
+```
+Simple Effect (validate)
+  → Effect with retry (uploadToS3)
+  → Effect with resources (resizeSingle)
+  → Effect with parallel (resizeAll)
+  → Effect with rollback (processImage)
+  → Effect with dependencies (via Services)
+  → Complete program (main)
+```
+
+Each layer adds new capabilities **without changing the code below**. This is the power of Effect's composability.
+
+---
+
+## Part 4: Additional Benefits (5 min)
 
 ### Dependency Injection with Layers
 
@@ -464,6 +1912,680 @@ export ENABLE_RETRY_LOGGING=true # Verbose retry logs
 
 ## Backup Demos (if time allows)
 
-- **Schema Validation** - Show @effect/schema replacing manual validation
-- **Concurrency Control** - Limit parallel uploads with Effect.withConcurrency
-- **Streaming** - Process large images in chunks with Effect.Stream
+### Advanced Feature 1: Schema Validation with @effect/schema
+
+**Problem:** Manual validation is verbose and error-prone (150+ lines in validation.ts)
+
+**Solution:** Declarative schemas with automatic validation and transformation
+
+**Installation:**
+```bash
+npm install @effect/schema
+```
+
+**Before (Manual Validation):**
+```typescript
+// src/validation.ts - 150+ lines of manual checks
+export function validateUploadInput(input: UploadImageInput): UploadImageInput {
+  if (!input.file || input.file.length === 0) {
+    throw new ValidationError('File is required', 'file');
+  }
+
+  if (input.file.length > MAX_FILE_SIZE) {
+    throw new ValidationError(`File too large: ${input.file.length}`, 'file');
+  }
+
+  if (!ALLOWED_MIME_TYPES.includes(input.mimeType)) {
+    throw new ValidationError(`Invalid MIME type: ${input.mimeType}`, 'mimeType');
+  }
+
+  if (!input.userId || input.userId.trim().length === 0) {
+    throw new ValidationError('User ID is required', 'userId');
+  }
+
+  if (input.tags) {
+    if (!Array.isArray(input.tags)) {
+      throw new ValidationError('Tags must be an array', 'tags');
+    }
+    if (input.tags.some(tag => typeof tag !== 'string')) {
+      throw new ValidationError('All tags must be strings', 'tags');
+    }
+    if (input.tags.some(tag => tag.length > 50)) {
+      throw new ValidationError('Tag length must not exceed 50 characters', 'tags');
+    }
+  }
+
+  // ... 100+ more lines ...
+}
+```
+
+**After (Schema-based Validation):**
+```typescript
+import { Schema } from "@effect/schema";
+import { Effect } from "effect";
+
+// Define the schema declaratively
+const UploadImageInputSchema = Schema.Struct({
+  file: Schema.Uint8ArrayFromSelf.pipe(
+    Schema.filter((buf) => buf.length > 0, {
+      message: () => "File cannot be empty"
+    }),
+    Schema.filter((buf) => buf.length <= MAX_FILE_SIZE, {
+      message: (buf) => `File too large: ${buf.length} bytes (max ${MAX_FILE_SIZE})`
+    })
+  ),
+
+  originalName: Schema.String.pipe(
+    Schema.nonEmpty({ message: () => "Original name is required" }),
+    Schema.maxLength(255, { message: () => "Filename too long" })
+  ),
+
+  mimeType: Schema.Literal("image/jpeg", "image/png", "image/webp").pipe(
+    Schema.annotations({
+      message: () => "Invalid MIME type. Allowed: image/jpeg, image/png, image/webp"
+    })
+  ),
+
+  userId: Schema.String.pipe(
+    Schema.nonEmpty({ message: () => "User ID is required" }),
+    Schema.trim,
+    Schema.minLength(1)
+  ),
+
+  tags: Schema.optional(
+    Schema.Array(
+      Schema.String.pipe(
+        Schema.maxLength(50, { message: () => "Tag too long (max 50 chars)" })
+      )
+    ).pipe(
+      Schema.maxItems(20, { message: () => "Too many tags (max 20)" })
+    )
+  )
+});
+
+// Validation is now one line!
+export const validateUploadInput = (input: unknown): Effect.Effect<
+  UploadImageInput,
+  ValidationError
+> =>
+  Schema.decodeUnknown(UploadImageInputSchema)(input).pipe(
+    Effect.mapError((parseError) =>
+      new ValidationError({
+        message: parseError.message,
+        field: parseError.path[0]?.toString(),
+        details: parseError
+      })
+    )
+  );
+```
+
+**Benefits:**
+- ✅ 150 lines → 30 lines (80% reduction!)
+- ✅ Type-safe: schema defines both runtime validation AND TypeScript types
+- ✅ Composable: can reuse schemas
+- ✅ Better error messages: precise paths to invalid fields
+- ✅ Automatic transformations: trim, normalize, etc.
+
+**Advanced Schema Features:**
+
+```typescript
+// Transform data during validation
+const ImageMetadataSchema = Schema.Struct({
+  uploadedAt: Schema.String.pipe(
+    Schema.DateFromString  // Automatically parse ISO string to Date
+  ),
+  fileSize: Schema.Number.pipe(
+    Schema.positive({ message: () => "File size must be positive" }),
+    Schema.int({ message: () => "File size must be an integer" })
+  ),
+  tags: Schema.Array(Schema.String).pipe(
+    Schema.transform(
+      Schema.Array(Schema.String),
+      (tags) => [...new Set(tags.map(t => t.toLowerCase()))], // Dedupe & lowercase
+      (tags) => tags
+    )
+  )
+});
+
+// Branded types for domain primitives
+const ImageId = Schema.String.pipe(
+  Schema.pattern(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i, {
+    message: () => "Invalid UUID format"
+  }),
+  Schema.brand("ImageId")
+);
+
+type ImageId = Schema.Schema.Type<typeof ImageId>; // Has brand in type system!
+
+// Now you can't accidentally mix up ImageId with UserId
+function processImage(imageId: ImageId) { /* ... */ }
+
+const userId: UserId = "some-uuid";
+processImage(userId); // ❌ Compile error! Type safety!
+```
+
+---
+
+### Advanced Feature 2: Streaming Large Files with Effect.Stream
+
+**Problem:** Loading entire large images into memory is wasteful and fails for huge files
+
+**Solution:** Process images in chunks using Effect.Stream
+
+**Use Case:** Process a 500MB image file without loading it all into memory
+
+```typescript
+import { Stream, Effect, Chunk } from "effect";
+import * as fs from "fs";
+
+// Before: Load entire file into memory (FAILS for large files!)
+async function processLargeImage(filePath: string): Promise<void> {
+  const fileData = await fs.promises.readFile(filePath); // ❌ OOM for 500MB file!
+  await uploadToS3(fileData);
+}
+
+// After: Stream the file in chunks
+function processLargeImageStreaming(
+  filePath: string
+): Effect.Effect<void, StorageError, S3StorageService> {
+  return Effect.gen(function* (_) {
+    const s3 = yield* _(S3StorageService);
+
+    // Create a stream from file (reads in chunks)
+    const fileStream = Stream.fromReadableStream(
+      () => fs.createReadStream(filePath, { highWaterMark: 64 * 1024 }), // 64KB chunks
+      (error) => new StorageError({
+        message: "Failed to read file stream",
+        cause: error instanceof Error ? error : undefined
+      })
+    );
+
+    // Process chunks and upload
+    yield* _(
+      fileStream.pipe(
+        // Transform each chunk (e.g., compress)
+        Stream.mapEffect((chunk) =>
+          Effect.gen(function* (_) {
+            yield* _(Effect.log(`Processing chunk of ${chunk.length} bytes`));
+            // Could compress, encrypt, etc.
+            return chunk;
+          })
+        ),
+        // Upload chunks to S3 (multipart upload simulation)
+        Stream.runFold(
+          { uploadedBytes: 0, parts: [] as string[] },
+          (state, chunk) =>
+            Effect.gen(function* (_) {
+              const partNumber = state.parts.length + 1;
+              const partETag = yield* _(s3.uploadPart(chunk, partNumber));
+
+              return {
+                uploadedBytes: state.uploadedBytes + chunk.length,
+                parts: [...state.parts, partETag]
+              };
+            })
+        )
+      )
+    );
+
+    yield* _(Effect.log("Streaming upload complete"));
+  });
+}
+```
+
+**Advanced Streaming Patterns:**
+
+```typescript
+// 1. Rate-limited streaming (upload max 1MB/sec)
+const rateLimitedStream = fileStream.pipe(
+  Stream.throttle({
+    bandwidth: 1024 * 1024, // 1MB
+    duration: "1 second"
+  })
+);
+
+// 2. Parallel chunk processing with backpressure
+const parallelProcessing = fileStream.pipe(
+  Stream.mapEffectPar((chunk) => processChunk(chunk), 4), // Max 4 concurrent
+  Stream.buffer(10) // Buffer up to 10 chunks
+);
+
+// 3. Retry failed chunks
+const resilientStream = fileStream.pipe(
+  Stream.mapEffect((chunk) =>
+    uploadChunk(chunk).pipe(
+      Effect.retry(Schedule.exponential("100 millis"))
+    )
+  )
+);
+
+// 4. Stream multiple images in parallel
+const processMultipleImages = (imagePaths: string[]) =>
+  Stream.fromIterable(imagePaths).pipe(
+    Stream.mapEffectPar(
+      (path) => processLargeImageStreaming(path),
+      5 // Process 5 images concurrently
+    ),
+    Stream.runCollect
+  );
+
+// 5. Real-time progress tracking
+const withProgress = fileStream.pipe(
+  Stream.mapAccum(0, (totalBytes, chunk) => {
+    const newTotal = totalBytes + chunk.length;
+    const progress = (newTotal / totalFileSize) * 100;
+    return [newTotal, { chunk, progress }];
+  }),
+  Stream.tap(({ progress }) =>
+    Effect.log(`Upload progress: ${progress.toFixed(2)}%`)
+  )
+);
+```
+
+**Benefits:**
+- ✅ Constant memory usage (only chunk size in memory)
+- ✅ Backpressure handling (don't overwhelm downstream)
+- ✅ Composable transformations (map, filter, reduce)
+- ✅ Built-in error handling and retry
+- ✅ Automatic resource cleanup
+
+---
+
+### Advanced Feature 3: Concurrency Control and Rate Limiting
+
+**Problem:** Processing 100 images at once overwhelms the system
+
+**Solution:** Declarative concurrency control
+
+```typescript
+import { Effect, Schedule, RateLimiter } from "effect";
+
+// 1. Basic concurrency limiting
+const processBatch = (images: UploadImageInput[]) =>
+  Effect.all(
+    images.map(img => processImage(img)),
+    { concurrency: 5 } // Max 5 at a time
+  );
+
+// 2. Rate limiting (max 10 requests per second)
+const withRateLimit = Effect.gen(function* (_) {
+  const limiter = yield* _(
+    RateLimiter.make({
+      limit: 10,
+      interval: "1 second"
+    })
+  );
+
+  return (image: UploadImageInput) =>
+    limiter.use(() => processImage(image));
+});
+
+// Use it
+const processWithRateLimit = Effect.gen(function* (_) {
+  const limitedProcess = yield* _(withRateLimit);
+
+  // All these requests will be rate-limited to 10/sec
+  yield* _(Effect.all(
+    images.map(img => limitedProcess(img)),
+    { concurrency: "unbounded" }
+  ));
+});
+
+// 3. Advanced: Different rate limits for different operations
+const multiTierRateLimiting = Effect.gen(function* (_) {
+  // S3 uploads: max 50/sec
+  const s3Limiter = yield* _(RateLimiter.make({
+    limit: 50,
+    interval: "1 second"
+  }));
+
+  // CDN invalidation: max 10/sec (CDN has stricter limits)
+  const cdnLimiter = yield* _(RateLimiter.make({
+    limit: 10,
+    interval: "1 second"
+  }));
+
+  // Database writes: max 100/sec
+  const dbLimiter = yield* _(RateLimiter.make({
+    limit: 100,
+    interval: "1 second"
+  }));
+
+  return {
+    uploadToS3: (file: string) => s3Limiter.use(() => s3.upload(file)),
+    publishToCDN: (url: string) => cdnLimiter.use(() => cdn.publish(url)),
+    saveMetadata: (data: Metadata) => dbLimiter.use(() => db.save(data))
+  };
+});
+
+// 4. Semaphore for resource limiting (e.g., max 3 temp files at once)
+import { Semaphore } from "effect";
+
+const withTempFileLimit = Effect.gen(function* (_) {
+  // Only 3 temp files can exist concurrently
+  const tempFileSemaphore = yield* _(Semaphore.make(3));
+
+  return (imageId: string) =>
+    tempFileSemaphore.withPermit(
+      Effect.gen(function* (_) {
+        // Acquire temp file (blocks if 3 already in use)
+        const tempFile = yield* _(createTempFile(imageId));
+
+        // Process
+        yield* _(processFile(tempFile));
+
+        // Cleanup (release permit)
+        yield* _(deleteTempFile(tempFile));
+      })
+    );
+});
+```
+
+**Benefits:**
+- ✅ Prevent system overload
+- ✅ Respect external API rate limits
+- ✅ Control resource usage (memory, disk, connections)
+- ✅ Declarative: limits are visible in code
+
+---
+
+### Advanced Feature 4: Fibers and Structured Concurrency
+
+**Problem:** Manually managing concurrent operations is error-prone (what if we forget to cancel?)
+
+**Solution:** Fibers - lightweight threads with automatic lifecycle management
+
+```typescript
+import { Effect, Fiber } from "effect";
+
+// Before: Manual Promise race with cleanup issues
+async function processWithTimeout(image: Buffer): Promise<ImageMetadata> {
+  let timeoutId: NodeJS.Timeout;
+
+  const processingPromise = processImage(image);
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Timeout')), 30000);
+  });
+
+  try {
+    const result = await Promise.race([processingPromise, timeoutPromise]);
+    clearTimeout(timeoutId!); // Easy to forget!
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId!);
+    // If processingPromise is still running, it keeps going! (leak)
+    throw error;
+  }
+}
+
+// After: Fibers with automatic cancellation
+const processWithTimeoutEffect = (image: Buffer) =>
+  processImage(image).pipe(
+    Effect.timeout("30 seconds") // Automatically cancels on timeout!
+  );
+
+// Advanced: Run multiple operations concurrently, cancel all if one fails
+const processImageWithThumbnail = Effect.gen(function* (_) {
+  // Fork both operations as fibers
+  const fullImageFiber = yield* _(
+    processImage(fullSizeBuffer).pipe(Effect.fork)
+  );
+
+  const thumbnailFiber = yield* _(
+    generateThumbnail(fullSizeBuffer).pipe(Effect.fork)
+  );
+
+  // Wait for both
+  const fullImage = yield* _(Fiber.join(fullImageFiber));
+  const thumbnail = yield* _(Fiber.join(thumbnailFiber));
+
+  return { fullImage, thumbnail };
+});
+// If ANY error occurs, BOTH fibers are automatically cancelled!
+
+// Advanced: Race multiple strategies, cancel losers
+const processWithFallback = Effect.gen(function* (_) {
+  const fastButUnreliableFiber = yield* _(
+    processFast(image).pipe(Effect.fork)
+  );
+
+  const slowButReliableFiber = yield* _(
+    processSlow(image).pipe(Effect.fork)
+  );
+
+  // Wait for first to succeed
+  const result = yield* _(
+    Effect.raceAll([
+      Fiber.join(fastButUnreliableFiber),
+      Fiber.join(slowButReliableFiber)
+    ])
+  );
+
+  // Loser is automatically cancelled!
+  return result;
+});
+```
+
+**Benefits:**
+- ✅ Automatic cancellation propagation
+- ✅ No leaked background operations
+- ✅ Structured concurrency: all child fibers cleaned up
+- ✅ Interruption-safe: cleanup always runs
+
+---
+
+### Advanced Feature 5: Circuit Breakers for Resilience
+
+**Problem:** Keep retrying a failing service, making things worse (cascading failures)
+
+**Solution:** Circuit breaker pattern
+
+```typescript
+import { Effect, Schedule } from "effect";
+
+// Simple circuit breaker implementation
+const createCircuitBreaker = <A, E>(
+  operation: Effect.Effect<A, E>,
+  config: {
+    failureThreshold: number;
+    resetTimeout: Duration.Duration;
+  }
+) => {
+  let state: "closed" | "open" | "half-open" = "closed";
+  let failureCount = 0;
+  let lastFailureTime: number = 0;
+
+  return Effect.gen(function* (_) {
+    const now = Date.now();
+
+    // Check if we should try again
+    if (state === "open") {
+      if (now - lastFailureTime > Duration.toMillis(config.resetTimeout)) {
+        state = "half-open";
+        yield* _(Effect.log("Circuit breaker: half-open (testing)"));
+      } else {
+        return yield* _(
+          Effect.fail(new Error("Circuit breaker is OPEN"))
+        );
+      }
+    }
+
+    // Try the operation
+    try {
+      const result = yield* _(operation);
+
+      // Success! Reset circuit breaker
+      if (state === "half-open") {
+        state = "closed";
+        failureCount = 0;
+        yield* _(Effect.log("Circuit breaker: closed (recovered)"));
+      }
+
+      return result;
+    } catch (error) {
+      failureCount++;
+      lastFailureTime = now;
+
+      if (failureCount >= config.failureThreshold) {
+        state = "open";
+        yield* _(Effect.log(`Circuit breaker: OPEN (${failureCount} failures)`));
+      }
+
+      return yield* _(Effect.fail(error));
+    }
+  });
+};
+
+// Usage
+const uploadWithCircuitBreaker = createCircuitBreaker(
+  uploadToS3(file),
+  {
+    failureThreshold: 5,
+    resetTimeout: Duration.minutes(1)
+  }
+);
+```
+
+---
+
+### Advanced Feature 6: Type-safe Configuration with Effect Config
+
+**Problem:** Environment variables are stringly-typed and scattered
+
+**Solution:** Centralized, type-safe config
+
+```typescript
+import { Config, Effect } from "effect";
+
+// Define configuration schema
+const AppConfig = Config.all({
+  server: Config.all({
+    port: Config.number("PORT").pipe(Config.withDefault(3000)),
+    host: Config.string("HOST").pipe(Config.withDefault("localhost"))
+  }),
+
+  storage: Config.all({
+    s3Bucket: Config.string("S3_BUCKET"),
+    s3Region: Config.string("S3_REGION").pipe(Config.withDefault("us-east-1")),
+    maxFileSize: Config.number("MAX_FILE_SIZE_MB").pipe(
+      Config.withDefault(10),
+      Config.map(mb => mb * 1024 * 1024) // Convert to bytes
+    )
+  }),
+
+  features: Config.all({
+    enableCDN: Config.boolean("ENABLE_CDN").pipe(Config.withDefault(true)),
+    retryAttempts: Config.integer("RETRY_ATTEMPTS").pipe(
+      Config.validate((n) =>
+        n > 0 && n <= 10
+          ? Config.succeed(n)
+          : Config.fail(Config.Error("Retry attempts must be 1-10"))
+      )
+    )
+  })
+});
+
+// Use configuration
+const program = Effect.gen(function* (_) {
+  const config = yield* _(AppConfig);
+
+  yield* _(Effect.log(`Starting server on ${config.server.host}:${config.server.port}`));
+  yield* _(Effect.log(`S3 bucket: ${config.storage.s3Bucket}`));
+  yield* _(Effect.log(`Max file size: ${config.storage.maxFileSize} bytes`));
+});
+
+// Run with config
+Effect.runPromise(
+  program.pipe(
+    Effect.provide(Config.fromEnvironment)
+  )
+);
+```
+
+---
+
+### Advanced Feature 7: Testing with Effect.TestClock and Effect.TestRandom
+
+**Problem:** Testing retry logic, timeouts, and randomness is hard
+
+**Solution:** Deterministic time and randomness in tests
+
+```typescript
+import { Effect, TestClock, TestRandom, TestServices } from "effect";
+import { test, expect } from "vitest";
+
+test("retry with exponential backoff", async () => {
+  let attempts = 0;
+
+  const operation = Effect.gen(function* (_) {
+    attempts++;
+    if (attempts < 3) {
+      return yield* _(Effect.fail(new Error("Temporary failure")));
+    }
+    return "success";
+  });
+
+  const withRetry = operation.pipe(
+    Effect.retry(
+      Schedule.exponential("100 millis").pipe(
+        Schedule.union(Schedule.recurs(5))
+      )
+    )
+  );
+
+  // Run test with virtual time
+  const result = await Effect.runPromise(
+    Effect.gen(function* (_) {
+      // Fork the operation
+      const fiber = yield* _(Effect.fork(withRetry));
+
+      // Advance time manually
+      yield* _(TestClock.adjust("100 millis")); // First retry
+      yield* _(TestClock.adjust("200 millis")); // Second retry
+
+      // Join result
+      return yield* _(Fiber.join(fiber));
+    }).pipe(
+      Effect.provide(TestServices.TestServices)
+    )
+  );
+
+  expect(result).toBe("success");
+  expect(attempts).toBe(3);
+});
+
+test("random image size selection is deterministic", async () => {
+  const selectRandomSize = Effect.gen(function* (_) {
+    const sizes = ["thumbnail", "small", "medium", "large"];
+    const index = yield* _(Random.nextIntBetween(0, sizes.length));
+    return sizes[index];
+  });
+
+  // Run with seeded random
+  const [result1, result2] = await Effect.runPromise(
+    Effect.all([selectRandomSize, selectRandomSize]).pipe(
+      Effect.provide(TestRandom.deterministic),
+      Effect.provide(TestServices.TestServices)
+    )
+  );
+
+  // With same seed, results are identical
+  expect(result1).toBe(result2);
+});
+```
+
+---
+
+## Additional Features Summary
+
+These advanced features build on the core refactoring and provide:
+
+1. **@effect/schema** - Eliminate validation boilerplate (80% code reduction)
+2. **Effect.Stream** - Process large files without OOM
+3. **Rate Limiting** - Prevent system overload declaratively
+4. **Fibers** - Structured concurrency with automatic cancellation
+5. **Circuit Breakers** - Prevent cascading failures
+6. **Config** - Type-safe configuration management
+7. **Testing** - Deterministic time and randomness for reliable tests
+
+Each feature is **composable** with the others - you can combine schemas + streams + rate limiting + circuit breakers in a single pipeline!
