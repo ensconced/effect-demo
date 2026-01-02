@@ -23,30 +23,28 @@ else
     NODE_VERSION="24.12.0"
 fi
 
-# Ensure /usr/local/bin is at the front of PATH
-export PATH="/usr/local/bin:$PATH"
+# Install to ~/.local/bin which comes first in PATH on Claude Code web sessions
+INSTALL_DIR="$HOME/.local"
+mkdir -p "$INSTALL_DIR/bin"
 
-# Persist PATH to profile so it's available in the Claude Code session
-echo 'export PATH="/usr/local/bin:$PATH"' > /etc/profile.d/node-path.sh
-chmod +x /etc/profile.d/node-path.sh
-
-# Check if the correct Node version is already installed in /usr/local/bin
-if [ -f "/usr/local/bin/node" ] && [ "$(/usr/local/bin/node --version)" = "v${NODE_VERSION}" ]; then
+# Check if the correct Node version is already installed
+if [ -f "$INSTALL_DIR/bin/node" ] && [ "$("$INSTALL_DIR/bin/node" --version)" = "v${NODE_VERSION}" ]; then
     echo "✓ Node.js v${NODE_VERSION} already installed"
 else
     echo "📥 Installing Node.js v${NODE_VERSION}..."
 
     # Download and install Node.js directly from nodejs.org
+    cd /tmp
     curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
     tar -xJf "node-v${NODE_VERSION}-linux-x64.tar.xz"
 
-    # Copy to /usr/local (which should be in PATH)
-    cp -r "node-v${NODE_VERSION}-linux-x64"/* /usr/local/
+    # Copy binaries to ~/.local (bin, lib, include, share)
+    cp -r "node-v${NODE_VERSION}-linux-x64"/* "$INSTALL_DIR/"
 
     # Clean up
     rm -rf "node-v${NODE_VERSION}-linux-x64"*
 
-    echo "✓ Node.js v${NODE_VERSION} installed to /usr/local/bin"
+    echo "✓ Node.js v${NODE_VERSION} installed to $INSTALL_DIR/bin"
 fi
 
-echo "✅ Node.js $(node --version) ready!"
+echo "✅ Node.js $($INSTALL_DIR/bin/node --version) ready!"
