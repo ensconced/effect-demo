@@ -21,6 +21,7 @@
   "devDependencies": {
     "@effect/language-service": "^0.63.2",
     "@types/express": "^5.0.0",
-    "@types/node": "^24.0.0"
+    "@types/node": "^24.0.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260102.1"
   }
 }

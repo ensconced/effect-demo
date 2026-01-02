@@ -22,6 +22,7 @@ export class FileStorage {
     } catch (error) {
       throw new StorageError(
         `Failed to initialize storage at ${this.basePath}`,
+        undefined,
         error instanceof Error ? error : undefined
       );
     }
@@ -69,6 +70,7 @@ export class FileStorage {
     // All retries failed
     throw new StorageError(
       `Failed to save file ${id} after ${this.maxRetries + 1} attempts`,
+      undefined,
       lastError
     );
   }
@@ -119,6 +121,7 @@ export class FileStorage {
 
     throw new StorageError(
       `Failed to read file ${id} after ${this.maxRetries + 1} attempts`,
+      undefined,
       lastError
     );
   }
@@ -133,7 +136,7 @@ export class FileStorage {
       if (error.code === 'ENOENT') {
         return;
       }
-      throw new StorageError(`Failed to delete file ${id}`, error);
+      throw new StorageError(`Failed to delete file ${id}`, undefined, error instanceof Error ? error : undefined);
     }
   }
 
@@ -142,7 +145,7 @@ export class FileStorage {
       const files = await fs.readdir(this.basePath);
       return files.map(f => path.basename(f, '.txt'));
     } catch (error) {
-      throw new StorageError('Failed to list files', error instanceof Error ? error : undefined);
+      throw new StorageError('Failed to list files', undefined, error instanceof Error ? error : undefined);
     }
   }
 

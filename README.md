@@ -25,6 +25,9 @@ The server will start on `http://localhost:3000`.
 
 > This project uses Node.js v24+ native TypeScript support to run TypeScript directly without a build step or external tools.
 > Use `nvm use` to switch to the correct Node version (specified in `.nvmrc`).
+>
+> For enhanced editor/LSP support, this project uses [tsgo](https://github.com/microsoft/typescript-go) (TypeScript's native Go implementation).
+> Run `npx tsgo --noEmit` to type-check the project.
 
 ## API Endpoints
 
