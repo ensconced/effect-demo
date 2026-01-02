@@ -14,10 +14,13 @@ A REST API for managing documents:
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
 
 The server will start on `http://localhost:3000`.
+
+> This project uses Node.js v24+ native TypeScript support to run TypeScript directly without a build step or external tools.
+> Use `nvm use` to switch to the correct Node version (specified in `.nvmrc`).
 
 ## API Endpoints
 

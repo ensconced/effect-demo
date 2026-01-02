@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Example API calls for the document service demo
-# Make sure the server is running: npm run dev
+# Make sure the server is running: npm start
 
 BASE_URL="http://localhost:3000/api"
 
