@@ -1,4 +1,5 @@
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from 'express';
 import { ImageService } from '../services/image-service.ts';
 import {
   ValidationError,
@@ -7,6 +8,8 @@ import {
   DatabaseError,
   ResourceError,
   NetworkError,
+} from '../types.ts';
+import type {
   ProcessingConfig,
 } from '../types.ts';
 

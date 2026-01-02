@@ -1,4 +1,5 @@
-import { ValidationError, UploadImageInput, ProcessingConfig } from './types.ts';
+import { ValidationError } from './types.ts';
+import type { UploadImageInput, ProcessingConfig } from './types.ts';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB

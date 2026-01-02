@@ -5,14 +5,16 @@ import { S3Storage } from '../storage/s3-storage.ts';
 import { CDNPublisher } from '../storage/cdn-publisher.ts';
 import { MetadataStorage } from '../storage/metadata-storage.ts';
 import {
+  ProcessingError,
+  StorageError,
+  DatabaseError,
+} from '../types.ts';
+import type {
   ImageMetadata,
   ImageVariant,
   ImageSize,
   UploadImageInput,
   ProcessingConfig,
-  ProcessingError,
-  StorageError,
-  DatabaseError,
 } from '../types.ts';
 import { validateUploadInput, validateImageId } from '../validation.ts';
 

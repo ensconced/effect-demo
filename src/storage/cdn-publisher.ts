@@ -1,4 +1,5 @@
-import { NetworkError, ProcessingConfig } from '../types.ts';
+import { NetworkError } from '../types.ts';
+import type { ProcessingConfig } from '../types.ts';
 
 /**
  * CDN Publisher - simulates publishing to CDN (CloudFront, Cloudflare, etc.)

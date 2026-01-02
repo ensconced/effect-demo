@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { StorageError, NetworkError, ProcessingConfig } from '../types.ts';
+import { StorageError, NetworkError } from '../types.ts';
+import type { ProcessingConfig } from '../types.ts';
 
 /**
  * File storage layer - local file system storage
