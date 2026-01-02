@@ -1,8 +1,23 @@
 #!/bin/bash
 # Claude Code Session Start Hook
 # Ensures the correct Node.js version is available using fnm
+# Only runs in Claude Code web sessions, not local environments
 
 set -e
+
+# Check if running in Claude Code web environment
+# Claude Code web runs in a containerized/cloud environment
+# We can detect this by checking for indicators like:
+# - Not having a USER home directory in typical locations
+# - Being in a container-like environment
+# - Specific environment variables
+
+# Skip this hook if running locally (detect by checking common local indicators)
+if [ -n "$HOME" ] && [ -d "$HOME/.config" ] && [ ! -f "/.dockerenv" ] && [ -z "$CODESPACES" ]; then
+    # This appears to be a local environment with a real home directory
+    # Skip the Node.js setup as the user likely has their own Node.js setup
+    exit 0
+fi
 
 echo "🔧 Setting up Node.js environment..."
 
