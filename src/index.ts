@@ -73,7 +73,6 @@ async function main() {
   });
 
   // Global error handler
-  // Express v5 automatically catches errors in async route handlers
   app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error('Unhandled error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
