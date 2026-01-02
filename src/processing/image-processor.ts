@@ -2,12 +2,14 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import {
-  ImageSize,
-  ImageDimensions,
-  ImageVariant,
   SIZE_CONFIGS,
   ProcessingError,
   ResourceError,
+} from '../types.ts';
+import type {
+  ImageSize,
+  ImageDimensions,
+  ImageVariant,
   ProcessingConfig,
 } from '../types.ts';
 import { validateImageDimensions } from '../validation.ts';

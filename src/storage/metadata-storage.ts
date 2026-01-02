@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { ImageMetadata, DatabaseError, ProcessingConfig } from '../types.ts';
+import { DatabaseError } from '../types.ts';
+import type { ImageMetadata, ProcessingConfig } from '../types.ts';
 
 /**
  * Metadata storage layer - simulates DynamoDB
