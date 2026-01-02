@@ -337,12 +337,12 @@ const resizeAllValidate = Effect.all([...], { mode: "validate" });
 
 **To:**
 ```typescript
-const processImage = Effect.gen(function* (_) {
+const processImage = Effect.gen(function* () {
   // All operations in a transaction-like scope
-  const file = yield* _(storeFile);
-  const s3 = yield* _(storeToS3);
-  const cdn = yield* _(publishToCDN);
-  const metadata = yield* _(saveMetadata);
+  const file = yield* storeFile;
+  const s3 = yield* storeToS3;
+  const cdn = yield* publishToCDN;
+  const metadata = yield* saveMetadata;
 
   return { file, s3, cdn, metadata };
 }).pipe(
@@ -689,46 +689,46 @@ export function validateUploadInput(
   input: UploadImageInput,
   config?: ProcessingConfig
 ): Effect.Effect<UploadImageInput, ValidationError> {
-  return Effect.gen(function* (_) {
+  return Effect.gen(function* () {
     // Error injection
     if (config?.shouldFailValidation) {
-      return yield* _(
+      return yield* 
         Effect.fail(new ValidationError({
           message: 'Simulated validation failure'
         }))
-      );
+      ;
     }
 
     // File presence check
     if (!input.file || input.file.length === 0) {
-      return yield* _(
+      return yield* 
         Effect.fail(new ValidationError({
           message: 'File is required',
           field: 'file'
         }))
-      );
+      ;
     }
 
     // File size check
     if (input.file.length > MAX_FILE_SIZE) {
-      return yield* _(
+      return yield* 
         Effect.fail(new ValidationError({
           message: `File too large: ${input.file.length} bytes (max ${MAX_FILE_SIZE})`,
           field: 'file',
           details: { size: input.file.length, max: MAX_FILE_SIZE }
         }))
-      );
+      ;
     }
 
     // MIME type check
     if (!ALLOWED_MIME_TYPES.includes(input.mimeType)) {
-      return yield* _(
+      return yield* 
         Effect.fail(new ValidationError({
           message: `Invalid MIME type: ${input.mimeType}`,
           field: 'mimeType',
           details: { allowed: ALLOWED_MIME_TYPES }
         }))
-      );
+      ;
     }
 
     // All validations passed
@@ -740,7 +740,7 @@ export function validateUploadInput(
 **Learning Points:**
 - `Effect.Effect<A, E>` means: "A computation that succeeds with type A or fails with error type E"
 - `Effect.gen` is like async/await, but for Effects
-- `yield* _(effect)` unwraps the effect (like `await promise`)
+- `yield* effect` unwraps the effect (like `await promise`)
 - `Effect.fail()` creates a failed Effect (like throwing, but typed)
 - Return type tells us exactly what can go wrong: `ValidationError`
 
@@ -771,16 +771,16 @@ import { ProcessingError, ValidationError } from "../errors.ts";
 extractDimensions(
   file: Buffer
 ): Effect.Effect<ImageDimensions, ProcessingError | ValidationError> {
-  return Effect.gen(function* (_) {
+  return Effect.gen(function* () {
     // Simulate processing delay
-    yield* _(Effect.sleep("50 millis"));
+    yield* Effect.sleep("50 millis");
 
     // Simulate dimension extraction
     const width = 1920 + Math.floor(Math.random() * 1000);
     const height = 1080 + Math.floor(Math.random() * 1000);
 
     // Validate (this is also an Effect now)
-    yield* _(validateImageDimensions(width, height));
+    yield* validateImageDimensions(width, height);
 
     return { width, height };
   });
@@ -841,21 +841,21 @@ saveFile(
   data: Buffer,
   config?: ProcessingConfig
 ): Effect.Effect<void, StorageError> {
-  return Effect.gen(function* (_) {
+  return Effect.gen(function* () {
     // Error injection
     if (config?.shouldFailStorage) {
-      return yield* _(
+      return yield* 
         Effect.fail(new StorageError({
           message: 'Simulated storage failure',
           location: 'file'
         }))
-      );
+      ;
     }
 
     const filePath = path.join(this.storageDir, `${key}.bin`);
 
     // Wrap Node.js async operation in Effect
-    yield* _(
+    yield* 
       Effect.tryPromise({
         try: () => fs.writeFile(filePath, data),
         catch: (error) => new StorageError({
@@ -864,9 +864,9 @@ saveFile(
           cause: error instanceof Error ? error : new Error(String(error))
         })
       })
-    );
+    ;
 
-    yield* _(Effect.log(`Saved file: ${key}`));
+    yield* Effect.log(`Saved file: ${key}`);
   });
 }
 ```
@@ -958,13 +958,13 @@ resizeSingle(
   // Create the temp file with automatic cleanup
   return Effect.acquireRelease(
     // ACQUIRE: Create the temp file
-    Effect.gen(function* (_) {
-      yield* _(Effect.log(`Creating temp file: ${size}`));
+    Effect.gen(function* () {
+      yield* Effect.log(`Creating temp file: ${size}`);
 
       // ... do resize logic ...
       const resizedFileSize = Math.floor(file.length * 0.7);
 
-      yield* _(
+      yield* 
         Effect.tryPromise({
           try: () => fs.writeFile(filePath, Buffer.alloc(resizedFileSize, 0)),
           catch: (error) => new ProcessingError({
@@ -973,7 +973,7 @@ resizeSingle(
             cause: error instanceof Error ? error : undefined
           })
         })
-      );
+      ;
 
       return { size, dimensions, fileSize: resizedFileSize, filePath };
     }),
@@ -981,10 +981,10 @@ resizeSingle(
     // RELEASE: Clean up the temp file
     // This runs even if downstream operations fail!
     (variant) =>
-      Effect.gen(function* (_) {
-        yield* _(Effect.log(`Cleaning up temp file: ${variant.size}`));
+      Effect.gen(function* () {
+        yield* Effect.log(`Cleaning up temp file: ${variant.size}`);
 
-        yield* _(
+        yield* 
           Effect.tryPromise({
             try: () => fs.unlink(variant.filePath),
             catch: () => {
@@ -992,7 +992,7 @@ resizeSingle(
               console.warn(`Failed to cleanup temp file: ${variant.filePath}`);
             }
           })
-        );
+        ;
       })
   );
 }
@@ -1009,15 +1009,15 @@ resizeSingle(
 
 ```typescript
 // For multiple temp files with automatic cleanup
-const resizeAllWithCleanup = Effect.gen(function* (_) {
+const resizeAllWithCleanup = Effect.gen(function* () {
   // All temp files created in this scope will be cleaned up together
-  const thumbnail = yield* _(resizeSingle(file, 'thumbnail', ...));
-  const small = yield* _(resizeSingle(file, 'small', ...));
-  const medium = yield* _(resizeSingle(file, 'medium', ...));
-  const large = yield* _(resizeSingle(file, 'large', ...));
+  const thumbnail = yield* resizeSingle(file, 'thumbnail', ...);
+  const small = yield* resizeSingle(file, 'small', ...);
+  const medium = yield* resizeSingle(file, 'medium', ...);
+  const large = yield* resizeSingle(file, 'large', ...);
 
   // If we fail here, ALL four files are cleaned up automatically
-  yield* _(uploadToS3(thumbnail, small, medium, large));
+  yield* uploadToS3(thumbnail, small, medium, large);
 
   return { thumbnail, small, medium, large };
 }).pipe(
@@ -1127,19 +1127,19 @@ resizeToAllSizes(
 ): Effect.Effect<Record<ImageSize, ImageVariant>, ProcessingError> {
   const sizes: ImageSize[] = ['thumbnail', 'small', 'medium', 'large'];
 
-  return Effect.gen(function* (_) {
-    yield* _(Effect.log(`Resizing to ${sizes.length} sizes in parallel...`));
+  return Effect.gen(function* () {
+    yield* Effect.log(`Resizing to ${sizes.length} sizes in parallel...`);
 
     // Option 1: Fail if ANY fails (short-circuit)
     // This is the default mode
-    const variants = yield* _(
+    const variants = yield* 
       Effect.all(
         sizes.map(size =>
           this.resizeSingle(file, size, originalDimensions, imageId, config)
         ),
         { concurrency: 4 } // Control parallelism
       )
-    );
+    ;
 
     // Convert array to record
     const variantsRecord: Record<ImageSize, ImageVariant> = {} as any;
@@ -1164,16 +1164,16 @@ resizeToAllSizesValidate(
 > {
   const sizes: ImageSize[] = ['thumbnail', 'small', 'medium', 'large'];
 
-  return Effect.gen(function* (_) {
+  return Effect.gen(function* () {
     // "validate" mode collects all results
-    const results = yield* _(
+    const results = yield* 
       Effect.all(
         sizes.map(size =>
           this.resizeSingle(file, size, originalDimensions, imageId, config)
         ),
         { mode: "validate" }
       )
-    );
+    ;
 
     // results is an array of Exit values
     // We can inspect each one
@@ -1189,13 +1189,13 @@ resizeToAllSizesValidate(
     }
 
     if (failed.length > 0) {
-      return yield* _(
+      return yield* 
         Effect.fail(new ProcessingError({
           message: `Failed to resize ${failed.length}/${sizes.length} sizes`,
           stage: 'resize',
           cause: failed[0]
         }))
-      );
+      ;
     }
 
     // Convert to record
@@ -1316,18 +1316,18 @@ uploadFile(
   config?: ProcessingConfig
 ): Effect.Effect<string, StorageError | NetworkError> {
   // Define the core operation (no retry logic!)
-  const upload = Effect.gen(function* (_) {
+  const upload = Effect.gen(function* () {
     if (config?.shouldFailS3) {
-      return yield* _(
+      return yield* 
         Effect.fail(new NetworkError({
           message: 'Simulated S3 failure',
           retryable: true
         }))
-      );
+      ;
     }
 
     // Read file
-    const fileData = yield* _(
+    const fileData = yield* 
       Effect.tryPromise({
         try: () => fs.readFile(filePath),
         catch: (error) => new StorageError({
@@ -1336,13 +1336,13 @@ uploadFile(
           cause: error instanceof Error ? error : undefined
         })
       })
-    );
+    ;
 
     // Simulate S3 upload
-    yield* _(Effect.sleep("200 millis"));
+    yield* Effect.sleep("200 millis");
 
     const s3Url = `https://s3.amazonaws.com/bucket/${s3Key}`;
-    yield* _(Effect.log(`Uploaded to S3: ${s3Key}`));
+    yield* Effect.log(`Uploaded to S3: ${s3Key}`);
 
     return s3Url;
   });
@@ -1527,35 +1527,35 @@ processImage(
   ImageMetadata,
   ValidationError | ProcessingError | StorageError | DatabaseError
 > {
-  return Effect.gen(function* (_) {
-    yield* _(Effect.log("\n=== Starting Image Processing Pipeline ==="));
+  return Effect.gen(function* () {
+    yield* Effect.log("\n=== Starting Image Processing Pipeline ===");
 
     // Step 1: Validate
-    const validatedInput = yield* _(validateUploadInput(input, config));
+    const validatedInput = yield* validateUploadInput(input, config);
     const imageId = randomUUID();
 
     // Step 2: Extract dimensions
-    yield* _(Effect.log("Step 1: Extracting dimensions..."));
-    const dimensions = yield* _(
+    yield* Effect.log("Step 1: Extracting dimensions...");
+    const dimensions = yield* 
       this.processor.extractDimensions(validatedInput.file)
-    );
-    yield* _(Effect.log(`✓ Dimensions: ${dimensions.width}x${dimensions.height}`));
+    ;
+    yield* Effect.log(`✓ Dimensions: ${dimensions.width}x${dimensions.height}`);
 
     // Step 3: Resize to all sizes (parallel!)
-    yield* _(Effect.log("\nStep 2: Resizing to multiple sizes..."));
-    const variants = yield* _(
+    yield* Effect.log("\nStep 2: Resizing to multiple sizes...");
+    const variants = yield* 
       this.processor.resizeToAllSizes(
         validatedInput.file,
         dimensions,
         imageId,
         config
       )
-    );
-    yield* _(Effect.log(`✓ Created ${Object.keys(variants).length} variants`));
+    ;
+    yield* Effect.log(`✓ Created ${Object.keys(variants).length} variants`);
 
     // Step 4: Optimize (sequential, but errors don't fail the whole operation)
-    yield* _(Effect.log("\nStep 3: Optimizing images..."));
-    yield* _(
+    yield* Effect.log("\nStep 3: Optimizing images...");
+    yield* 
       Effect.all(
         Object.entries(variants).map(([size, variant]) =>
           this.processor.optimize(variant.filePath, config).pipe(
@@ -1566,59 +1566,55 @@ processImage(
         ),
         { concurrency: 4 }
       )
-    );
+    ;
 
     // Step 5: Save to file storage (with rollback on failure)
-    yield* _(Effect.log("\nStep 4: Saving to file storage..."));
-    yield* _(
+    yield* Effect.log("\nStep 4: Saving to file storage...");
+    yield* 
       this.fileStorage.saveFile(
         `${imageId}-original`,
         validatedInput.file,
         config
       )
-    );
-    yield* _(Effect.log("✓ Saved to file storage"));
+    ;
+    yield* Effect.log("✓ Saved to file storage");
 
     // Step 6: Upload to S3 (with automatic retry from Phase 5)
-    yield* _(Effect.log("\nStep 5: Uploading to S3..."));
-    yield* _(
+    yield* Effect.log("\nStep 5: Uploading to S3...");
+    yield* 
       Effect.all(
         Object.entries(variants).map(([size, variant]) =>
-          Effect.gen(function* (_) {
+          Effect.gen(function* () {
             const s3Key = `images/${imageId}/${size}.jpg`;
-            const s3Url = yield* _(
-              this.s3Storage.uploadFile(variant.filePath, s3Key, config)
-            );
+            const s3Url = yield* this.s3Storage.uploadFile(variant.filePath, s3Key, config);
             variant.s3Url = s3Url;
             return { size: size as ImageSize, url: s3Url };
           })
         ),
         { concurrency: 4 }
       )
-    );
-    yield* _(Effect.log(`✓ Uploaded ${Object.keys(variants).length} files to S3`));
+    ;
+    yield* Effect.log(`✓ Uploaded ${Object.keys(variants).length} files to S3`);
 
     // Step 7: Publish to CDN
-    yield* _(Effect.log("\nStep 6: Publishing to CDN..."));
-    yield* _(
+    yield* Effect.log("\nStep 6: Publishing to CDN...");
+    yield* 
       Effect.all(
         Object.entries(variants).map(([size, variant]) =>
-          Effect.gen(function* (_) {
+          Effect.gen(function* () {
             if (!variant.s3Url) return;
             const cdnKey = `images/${imageId}/${size}.jpg`;
-            const cdnUrl = yield* _(
-              this.cdnPublisher.publishFile(variant.s3Url, cdnKey, config)
-            );
+            const cdnUrl = yield* this.cdnPublisher.publishFile(variant.s3Url, cdnKey, config);
             variant.cdnUrl = cdnUrl;
           })
         ),
         { concurrency: 4 }
       )
-    );
-    yield* _(Effect.log("✓ Published to CDN"));
+    ;
+    yield* Effect.log("✓ Published to CDN");
 
     // Step 8: Save metadata
-    yield* _(Effect.log("\nStep 7: Saving metadata..."));
+    yield* Effect.log("\nStep 7: Saving metadata...");
     const metadata: ImageMetadata = {
       id: imageId,
       originalName: validatedInput.originalName,
@@ -1632,20 +1628,20 @@ processImage(
       userId: validatedInput.userId,
     };
 
-    yield* _(this.metadataStorage.save(metadata, config));
-    yield* _(Effect.log("✓ Metadata saved"));
+    yield* this.metadataStorage.save(metadata, config);
+    yield* Effect.log("✓ Metadata saved");
 
-    yield* _(Effect.log("\n=== Image Processing Complete ===\n"));
+    yield* Effect.log("\n=== Image Processing Complete ===\n");
     return metadata;
   }).pipe(
     // Add automatic rollback on ANY error
     Effect.onError((cause) =>
-      Effect.gen(function* (_) {
-        yield* _(Effect.log("\n!!! Error during processing, rolling back !!!"));
+      Effect.gen(function* () {
+        yield* Effect.log("\n!!! Error during processing, rolling back !!!");
 
         // Rollback in reverse order
         // Each rollback is best-effort (catchAll prevents rollback errors from failing)
-        yield* _(
+        yield* 
           Effect.all([
             this.metadataStorage.delete(imageId).pipe(
               Effect.catchAll(() => Effect.log("Rollback: Metadata not found"))
@@ -1668,9 +1664,9 @@ processImage(
               Effect.catchAll(() => Effect.log("Rollback: File already removed"))
             )
           ], { concurrency: "unbounded" })
-        );
+        ;
 
-        yield* _(Effect.log("Rollback complete"));
+        yield* Effect.log("Rollback complete");
       })
     )
   );
@@ -1690,35 +1686,35 @@ processImage(
 ```typescript
 import { Compensated } from "@effect/experimental";
 
-const processImageWithCompensations = Effect.gen(function* (_) {
+const processImageWithCompensations = Effect.gen(function* () {
   // Each step registers its compensation (rollback action)
-  const fileKey = yield* _(
+  const fileKey = yield* 
     Compensated.make(
       this.fileStorage.saveFile(`${imageId}-original`, file, config),
       () => this.fileStorage.deleteFile(`${imageId}-original`)
     )
-  );
+  ;
 
-  const s3Urls = yield* _(
+  const s3Urls = yield* 
     Compensated.make(
       uploadAllToS3(variants, imageId, config),
       (urls) => deleteAllFromS3(urls)
     )
-  );
+  ;
 
-  const cdnUrls = yield* _(
+  const cdnUrls = yield* 
     Compensated.make(
       publishAllToCDN(variants, imageId, config),
       (urls) => invalidateAllOnCDN(urls)
     )
-  );
+  ;
 
-  const metadata = yield* _(
+  const metadata = yield* 
     Compensated.make(
       this.metadataStorage.save(metadataToSave, config),
       (saved) => this.metadataStorage.delete(saved.id)
     )
-  );
+  ;
 
   return metadata;
 }).pipe(
@@ -1847,21 +1843,21 @@ export const ImageProcessorLive = Layer.succeed(
   ImageProcessorService,
   {
     extractDimensions: (file: Buffer) =>
-      Effect.gen(function* (_) {
-        yield* _(Effect.sleep("50 millis"));
+      Effect.gen(function* () {
+        yield* Effect.sleep("50 millis");
         const width = 1920 + Math.floor(Math.random() * 1000);
         const height = 1080 + Math.floor(Math.random() * 1000);
-        yield* _(validateImageDimensions(width, height));
+        yield* validateImageDimensions(width, height);
         return { width, height };
       }),
 
     resizeToAllSizes: (file, dimensions, imageId, config) =>
-      Effect.gen(function* (_) {
+      Effect.gen(function* () {
         // ... implementation from Phase 4 ...
       }),
 
     optimize: (filePath, config) =>
-      Effect.gen(function* (_) {
+      Effect.gen(function* () {
         // ... implementation ...
       })
   }
@@ -1906,20 +1902,20 @@ processImage(
   ImageProcessorService | FileStorageService | S3StorageService | CDNPublisherService | MetadataStorageService
   // ^^^ Dependencies are in the type!
 > {
-  return Effect.gen(function* (_) {
+  return Effect.gen(function* () {
     // Access services via yield
-    const processor = yield* _(ImageProcessorService);
-    const fileStorage = yield* _(FileStorageService);
-    const s3Storage = yield* _(S3StorageService);
-    const cdnPublisher = yield* _(CDNPublisherService);
-    const metadataStorage = yield* _(MetadataStorageService);
+    const processor = yield* ImageProcessorService;
+    const fileStorage = yield* FileStorageService;
+    const s3Storage = yield* S3StorageService;
+    const cdnPublisher = yield* CDNPublisherService;
+    const metadataStorage = yield* MetadataStorageService;
 
     // Now use them exactly as before
-    const validatedInput = yield* _(validateUploadInput(input, config));
+    const validatedInput = yield* validateUploadInput(input, config);
     const imageId = randomUUID();
 
-    const dimensions = yield* _(processor.extractDimensions(validatedInput.file));
-    const variants = yield* _(processor.resizeToAllSizes(validatedInput.file, dimensions, imageId, config));
+    const dimensions = yield* processor.extractDimensions(validatedInput.file);
+    const variants = yield* processor.resizeToAllSizes(validatedInput.file, dimensions, imageId, config);
 
     // ... rest of pipeline ...
 
@@ -1977,9 +1973,9 @@ const AppTest = Layer.mergeAll(
 );
 
 // Run the application
-const program = Effect.gen(function* (_) {
+const program = Effect.gen(function* () {
   // processImage now has all dependencies available
-  const result = yield* _(processImage(uploadInput, config));
+  const result = yield* processImage(uploadInput, config);
   return result;
 }).pipe(
   Effect.provide(AppLive) // Provide the live implementations
@@ -2007,8 +2003,8 @@ const testProgram = processImage(uploadInput, config).pipe(
 // S3 depends on Config
 const S3StorageLive = Layer.effect(
   S3StorageService,
-  Effect.gen(function* (_) {
-    const config = yield* _(ConfigService);
+  Effect.gen(function* () {
+    const config = yield* ConfigService;
 
     return {
       uploadFile: (path, key, cfg) => /* implementation using config */
@@ -2021,9 +2017,9 @@ const S3StorageLive = Layer.effect(
 // CDN depends on S3 and Config
 const CDNPublisherLive = Layer.effect(
   CDNPublisherService,
-  Effect.gen(function* (_) {
-    const s3 = yield* _(S3StorageService);
-    const config = yield* _(ConfigService);
+  Effect.gen(function* () {
+    const s3 = yield* S3StorageService;
+    const config = yield* ConfigService;
 
     return {
       publishFile: (s3Url, cdnKey, cfg) => /* implementation */
@@ -2062,8 +2058,8 @@ import type { UploadImageInput, ProcessingConfig } from "./types.ts";
 const ServerPort = 3000;
 
 // Define the main application logic
-const app = Effect.gen(function* (_) {
-  yield* _(Effect.log("Starting Effect-based Image Processing Service"));
+const app = Effect.gen(function* () {
+  yield* Effect.log("Starting Effect-based Image Processing Service");
 
   // Create Express app
   const expressApp = express();
@@ -2116,19 +2112,19 @@ const app = Effect.gen(function* (_) {
   });
 
   // Start server
-  yield* _(
+  yield* 
     Effect.async<void, never>((resume) => {
       expressApp.listen(ServerPort, () => {
         console.log(`Server listening on port ${ServerPort}`);
         resume(Effect.void);
       });
     })
-  );
+  ;
 
-  yield* _(Effect.log("Server started successfully"));
+  yield* Effect.log("Server started successfully");
 
   // Keep running forever
-  yield* _(Effect.never);
+  yield* Effect.never;
 });
 
 // ============================================================
@@ -2179,15 +2175,15 @@ import { Effect, Layer, Runtime } from "effect";
 const AppRuntime = Layer.toRuntime(Layer.merge(AppLive, LoggerLive));
 
 // Graceful shutdown support
-const main = Effect.gen(function* (_) {
-  const runtime = yield* _(AppRuntime);
+const main = Effect.gen(function* () {
+  const runtime = yield* AppRuntime;
 
   // Handle shutdown signals
-  const shutdown = Effect.gen(function* (_) {
-    yield* _(Effect.log("Shutting down gracefully..."));
+  const shutdown = Effect.gen(function* () {
+    yield* Effect.log("Shutting down gracefully...");
 
     // Close all resources (automatic via Layers!)
-    yield* _(Effect.log("All resources cleaned up"));
+    yield* Effect.log("All resources cleaned up");
 
     process.exit(0);
   });
@@ -2201,7 +2197,7 @@ const main = Effect.gen(function* (_) {
   });
 
   // Run the app
-  yield* _(app);
+  yield* app;
 });
 
 Effect.runPromise(main);
@@ -2361,10 +2357,10 @@ Each layer adds new capabilities **without changing the code below**. This is th
 ```typescript
 class ImageProcessor extends Effect.Service<ImageProcessor>()("ImageProcessor", {
   dependencies: [S3Storage, CDNPublisher, MetadataDB],
-  effect: Effect.gen(function* (_) {
-    const s3 = yield* _(S3Storage);
-    const cdn = yield* _(CDNPublisher);
-    const db = yield* _(MetadataDB);
+  effect: Effect.gen(function* () {
+    const s3 = yield* S3Storage;
+    const cdn = yield* CDNPublisher;
+    const db = yield* MetadataDB;
 
     return { process: (image) => /* ... */ };
   })
@@ -2629,8 +2625,8 @@ async function processLargeImage(filePath: string): Promise<void> {
 function processLargeImageStreaming(
   filePath: string
 ): Effect.Effect<void, StorageError, S3StorageService> {
-  return Effect.gen(function* (_) {
-    const s3 = yield* _(S3StorageService);
+  return Effect.gen(function* () {
+    const s3 = yield* S3StorageService;
 
     // Create a stream from file (reads in chunks)
     const fileStream = Stream.fromReadableStream(
@@ -2642,12 +2638,12 @@ function processLargeImageStreaming(
     );
 
     // Process chunks and upload
-    yield* _(
+    yield* 
       fileStream.pipe(
         // Transform each chunk (e.g., compress)
         Stream.mapEffect((chunk) =>
-          Effect.gen(function* (_) {
-            yield* _(Effect.log(`Processing chunk of ${chunk.length} bytes`));
+          Effect.gen(function* () {
+            yield* Effect.log(`Processing chunk of ${chunk.length} bytes`);
             // Could compress, encrypt, etc.
             return chunk;
           })
@@ -2656,9 +2652,9 @@ function processLargeImageStreaming(
         Stream.runFold(
           { uploadedBytes: 0, parts: [] as string[] },
           (state, chunk) =>
-            Effect.gen(function* (_) {
+            Effect.gen(function* () {
               const partNumber = state.parts.length + 1;
-              const partETag = yield* _(s3.uploadPart(chunk, partNumber));
+              const partETag = yield* s3.uploadPart(chunk, partNumber);
 
               return {
                 uploadedBytes: state.uploadedBytes + chunk.length,
@@ -2667,9 +2663,9 @@ function processLargeImageStreaming(
             })
         )
       )
-    );
+    ;
 
-    yield* _(Effect.log("Streaming upload complete"));
+    yield* Effect.log("Streaming upload complete");
   });
 }
 ```
@@ -2749,48 +2745,48 @@ const processBatch = (images: UploadImageInput[]) =>
   );
 
 // 2. Rate limiting (max 10 requests per second)
-const withRateLimit = Effect.gen(function* (_) {
-  const limiter = yield* _(
+const withRateLimit = Effect.gen(function* () {
+  const limiter = yield* 
     RateLimiter.make({
       limit: 10,
       interval: "1 second"
     })
-  );
+  ;
 
   return (image: UploadImageInput) =>
     limiter.use(() => processImage(image));
 });
 
 // Use it
-const processWithRateLimit = Effect.gen(function* (_) {
-  const limitedProcess = yield* _(withRateLimit);
+const processWithRateLimit = Effect.gen(function* () {
+  const limitedProcess = yield* withRateLimit;
 
   // All these requests will be rate-limited to 10/sec
-  yield* _(Effect.all(
+  yield* Effect.all(
     images.map(img => limitedProcess(img)),
     { concurrency: "unbounded" }
-  ));
+  );
 });
 
 // 3. Advanced: Different rate limits for different operations
-const multiTierRateLimiting = Effect.gen(function* (_) {
+const multiTierRateLimiting = Effect.gen(function* () {
   // S3 uploads: max 50/sec
-  const s3Limiter = yield* _(RateLimiter.make({
+  const s3Limiter = yield* RateLimiter.make({
     limit: 50,
     interval: "1 second"
-  }));
+  });
 
   // CDN invalidation: max 10/sec (CDN has stricter limits)
-  const cdnLimiter = yield* _(RateLimiter.make({
+  const cdnLimiter = yield* RateLimiter.make({
     limit: 10,
     interval: "1 second"
-  }));
+  });
 
   // Database writes: max 100/sec
-  const dbLimiter = yield* _(RateLimiter.make({
+  const dbLimiter = yield* RateLimiter.make({
     limit: 100,
     interval: "1 second"
-  }));
+  });
 
   return {
     uploadToS3: (file: string) => s3Limiter.use(() => s3.upload(file)),
@@ -2802,21 +2798,21 @@ const multiTierRateLimiting = Effect.gen(function* (_) {
 // 4. Semaphore for resource limiting (e.g., max 3 temp files at once)
 import { Semaphore } from "effect";
 
-const withTempFileLimit = Effect.gen(function* (_) {
+const withTempFileLimit = Effect.gen(function* () {
   // Only 3 temp files can exist concurrently
-  const tempFileSemaphore = yield* _(Semaphore.make(3));
+  const tempFileSemaphore = yield* Semaphore.make(3);
 
   return (imageId: string) =>
     tempFileSemaphore.withPermit(
-      Effect.gen(function* (_) {
+      Effect.gen(function* () {
         // Acquire temp file (blocks if 3 already in use)
-        const tempFile = yield* _(createTempFile(imageId));
+        const tempFile = yield* createTempFile(imageId);
 
         // Process
-        yield* _(processFile(tempFile));
+        yield* processFile(tempFile);
 
         // Cleanup (release permit)
-        yield* _(deleteTempFile(tempFile));
+        yield* deleteTempFile(tempFile);
       })
     );
 });
@@ -2866,41 +2862,41 @@ const processWithTimeoutEffect = (image: Buffer) =>
   );
 
 // Advanced: Run multiple operations concurrently, cancel all if one fails
-const processImageWithThumbnail = Effect.gen(function* (_) {
+const processImageWithThumbnail = Effect.gen(function* () {
   // Fork both operations as fibers
-  const fullImageFiber = yield* _(
+  const fullImageFiber = yield* 
     processImage(fullSizeBuffer).pipe(Effect.fork)
-  );
+  ;
 
-  const thumbnailFiber = yield* _(
+  const thumbnailFiber = yield* 
     generateThumbnail(fullSizeBuffer).pipe(Effect.fork)
-  );
+  ;
 
   // Wait for both
-  const fullImage = yield* _(Fiber.join(fullImageFiber));
-  const thumbnail = yield* _(Fiber.join(thumbnailFiber));
+  const fullImage = yield* Fiber.join(fullImageFiber);
+  const thumbnail = yield* Fiber.join(thumbnailFiber);
 
   return { fullImage, thumbnail };
 });
 // If ANY error occurs, BOTH fibers are automatically cancelled!
 
 // Advanced: Race multiple strategies, cancel losers
-const processWithFallback = Effect.gen(function* (_) {
-  const fastButUnreliableFiber = yield* _(
+const processWithFallback = Effect.gen(function* () {
+  const fastButUnreliableFiber = yield* 
     processFast(image).pipe(Effect.fork)
-  );
+  ;
 
-  const slowButReliableFiber = yield* _(
+  const slowButReliableFiber = yield* 
     processSlow(image).pipe(Effect.fork)
-  );
+  ;
 
   // Wait for first to succeed
-  const result = yield* _(
+  const result = yield* 
     Effect.raceAll([
       Fiber.join(fastButUnreliableFiber),
       Fiber.join(slowButReliableFiber)
     ])
-  );
+  ;
 
   // Loser is automatically cancelled!
   return result;
@@ -2936,30 +2932,30 @@ const createCircuitBreaker = <A, E>(
   let failureCount = 0;
   let lastFailureTime: number = 0;
 
-  return Effect.gen(function* (_) {
+  return Effect.gen(function* () {
     const now = Date.now();
 
     // Check if we should try again
     if (state === "open") {
       if (now - lastFailureTime > Duration.toMillis(config.resetTimeout)) {
         state = "half-open";
-        yield* _(Effect.log("Circuit breaker: half-open (testing)"));
+        yield* Effect.log("Circuit breaker: half-open (testing)");
       } else {
-        return yield* _(
+        return yield* 
           Effect.fail(new Error("Circuit breaker is OPEN"))
-        );
+        ;
       }
     }
 
     // Try the operation
     try {
-      const result = yield* _(operation);
+      const result = yield* operation;
 
       // Success! Reset circuit breaker
       if (state === "half-open") {
         state = "closed";
         failureCount = 0;
-        yield* _(Effect.log("Circuit breaker: closed (recovered)"));
+        yield* Effect.log("Circuit breaker: closed (recovered)");
       }
 
       return result;
@@ -2969,10 +2965,10 @@ const createCircuitBreaker = <A, E>(
 
       if (failureCount >= config.failureThreshold) {
         state = "open";
-        yield* _(Effect.log(`Circuit breaker: OPEN (${failureCount} failures)`));
+        yield* Effect.log(`Circuit breaker: OPEN (${failureCount} failures)`);
       }
 
-      return yield* _(Effect.fail(error));
+      return yield* Effect.fail(error);
     }
   });
 };
@@ -3027,12 +3023,12 @@ const AppConfig = Config.all({
 });
 
 // Use configuration
-const program = Effect.gen(function* (_) {
-  const config = yield* _(AppConfig);
+const program = Effect.gen(function* () {
+  const config = yield* AppConfig;
 
-  yield* _(Effect.log(`Starting server on ${config.server.host}:${config.server.port}`));
-  yield* _(Effect.log(`S3 bucket: ${config.storage.s3Bucket}`));
-  yield* _(Effect.log(`Max file size: ${config.storage.maxFileSize} bytes`));
+  yield* Effect.log(`Starting server on ${config.server.host}:${config.server.port}`);
+  yield* Effect.log(`S3 bucket: ${config.storage.s3Bucket}`);
+  yield* Effect.log(`Max file size: ${config.storage.maxFileSize} bytes`);
 });
 
 // Run with config
@@ -3058,10 +3054,10 @@ import { test, expect } from "vitest";
 test("retry with exponential backoff", async () => {
   let attempts = 0;
 
-  const operation = Effect.gen(function* (_) {
+  const operation = Effect.gen(function* () {
     attempts++;
     if (attempts < 3) {
-      return yield* _(Effect.fail(new Error("Temporary failure")));
+      return yield* Effect.fail(new Error("Temporary failure"));
     }
     return "success";
   });
@@ -3076,16 +3072,16 @@ test("retry with exponential backoff", async () => {
 
   // Run test with virtual time
   const result = await Effect.runPromise(
-    Effect.gen(function* (_) {
+    Effect.gen(function* () {
       // Fork the operation
-      const fiber = yield* _(Effect.fork(withRetry));
+      const fiber = yield* Effect.fork(withRetry);
 
       // Advance time manually
-      yield* _(TestClock.adjust("100 millis")); // First retry
-      yield* _(TestClock.adjust("200 millis")); // Second retry
+      yield* TestClock.adjust("100 millis"); // First retry
+      yield* TestClock.adjust("200 millis"); // Second retry
 
       // Join result
-      return yield* _(Fiber.join(fiber));
+      return yield* Fiber.join(fiber);
     }).pipe(
       Effect.provide(TestServices.TestServices)
     )
@@ -3096,9 +3092,9 @@ test("retry with exponential backoff", async () => {
 });
 
 test("random image size selection is deterministic", async () => {
-  const selectRandomSize = Effect.gen(function* (_) {
+  const selectRandomSize = Effect.gen(function* () {
     const sizes = ["thumbnail", "small", "medium", "large"];
-    const index = yield* _(Random.nextIntBetween(0, sizes.length));
+    const index = yield* Random.nextIntBetween(0, sizes.length);
     return sizes[index];
   });
 
