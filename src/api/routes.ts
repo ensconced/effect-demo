@@ -1,11 +1,14 @@
-import { Router, Request, Response, NextFunction } from 'express';
-import { DocumentService } from '../services/document-service';
+import { Router, Request, Response } from 'express';
+import { ImageService } from '../services/image-service.ts';
 import {
   ValidationError,
-  NotFoundError,
+  ProcessingError,
   StorageError,
   DatabaseError,
-} from '../types';
+  ResourceError,
+  NetworkError,
+  ProcessingConfig,
+} from '../types.ts';
 
 /**
  * API Routes
@@ -15,60 +18,83 @@ import {
  * 2. Manual mapping of domain errors to HTTP status codes
  * 3. No type safety for request/response
  * 4. Error handling logic is duplicated across routes
+ * 5. Error injection via query params (for demo purposes)
  */
-export function createRouter(documentService: DocumentService): Router {
+export function createRouter(imageService: ImageService): Router {
   const router = Router();
 
-  // Create document
-  router.post('/documents', async (req: Request, res: Response) => {
+  /**
+   * Upload and process image
+   *
+   * Error injection via query parameters:
+   * ?fail=validation - Trigger validation error
+   * ?fail=resize - Fail all resizes
+   * ?fail=resize-partial - Fail 2/4 resizes
+   * ?fail=storage - Fail local storage
+   * ?fail=s3 - Fail S3 upload
+   * ?fail=cdn - Fail CDN publish
+   * ?fail=metadata - Fail metadata save
+   * ?fail=storage,cdn - Multiple failures
+   * ?failureRate=0.3 - 30% random failure rate
+   */
+  router.post('/images', async (req: Request, res: Response) => {
     try {
-      const document = await documentService.createDocument(req.body);
-      res.status(201).json(document);
+      // Extract error injection config from query params
+      const config: ProcessingConfig = buildConfigFromQuery(req.query);
+
+      // In production, would use multer for multipart/form-data
+      // For demo, accepting base64 encoded image in JSON
+      const { file, originalName, mimeType, userId, tags } = req.body;
+
+      if (!file) {
+        throw new ValidationError('Missing file data', 'file');
+      }
+
+      // Decode base64 to Buffer
+      const fileBuffer = Buffer.from(file, 'base64');
+
+      const metadata = await imageService.processImage(
+        {
+          file: fileBuffer,
+          originalName,
+          mimeType,
+          userId,
+          tags,
+        },
+        config
+      );
+
+      res.status(201).json(metadata);
     } catch (error) {
       handleError(error, res);
     }
   });
 
-  // Get document
-  router.get('/documents/:id', async (req: Request, res: Response) => {
+  // Get image metadata
+  router.get('/images/:id', async (req: Request, res: Response) => {
     try {
-      const document = await documentService.getDocument(req.params.id);
-      res.json(document);
+      const metadata = await imageService.getImage(req.params.id);
+      res.json(metadata);
     } catch (error) {
       handleError(error, res);
     }
   });
 
-  // Update document
-  router.put('/documents/:id', async (req: Request, res: Response) => {
+  // Delete image
+  router.delete('/images/:id', async (req: Request, res: Response) => {
     try {
-      const document = await documentService.updateDocument(req.params.id, req.body);
-      res.json(document);
-    } catch (error) {
-      handleError(error, res);
-    }
-  });
-
-  // Delete document
-  router.delete('/documents/:id', async (req: Request, res: Response) => {
-    try {
-      await documentService.deleteDocument(req.params.id);
+      await imageService.deleteImage(req.params.id);
       res.status(204).send();
     } catch (error) {
       handleError(error, res);
     }
   });
 
-  // List documents
-  router.get('/documents', async (req: Request, res: Response) => {
+  // List all images
+  router.get('/images', async (req: Request, res: Response) => {
     try {
-      const tag = req.query.tag as string | undefined;
-
-      const documents = tag
-        ? await documentService.searchByTag(tag)
-        : await documentService.listDocuments();
-
-      res.json(documents);
+      const images = await imageService.listImages();
+      res.json(images);
     } catch (error) {
       handleError(error, res);
     }
@@ -78,34 +104,71 @@ export function createRouter(documentService: DocumentService): Router {
 }
 
 /**
+ * Build ProcessingConfig from query parameters
+ * This enables error injection for demo purposes
+ */
+function buildConfigFromQuery(query: any): ProcessingConfig {
+  const failParam = query.fail as string | undefined;
+  const failureRate = query.failureRate ? parseFloat(query.failureRate as string) : undefined;
+
+  const failPoints = failParam ? failParam.split(',') : [];
+
+  return {
+    shouldFailValidation: failPoints.includes('validation'),
+    shouldFailResize: failPoints.includes('resize'),
+    shouldFailResizePartial: failPoints.includes('resize-partial'),
+    shouldFailOptimize: failPoints.includes('optimize'),
+    shouldFailStorage: failPoints.includes('storage'),
+    shouldFailS3: failPoints.includes('s3'),
+    shouldFailCDN: failPoints.includes('cdn'),
+    shouldFailMetadata: failPoints.includes('metadata'),
+    failureRate,
+  };
+}
+
+/**
  * Centralized error handler
  * Notice how we need to manually map error types to HTTP status codes
  * This is still repetitive and easy to get wrong
  */
 function handleError(error: unknown, res: Response): void {
-  console.error('Error:', error);
+  console.error('\nError occurred:', error);
 
   if (error instanceof ValidationError) {
     res.status(400).json({
       error: 'Validation Error',
       message: error.message,
       field: error.field,
+      details: error.details,
     });
-  } else if (error instanceof NotFoundError) {
-    res.status(404).json({
-      error: 'Not Found',
+  } else if (error instanceof ProcessingError) {
+    res.status(500).json({
+      error: 'Processing Error',
       message: error.message,
-      resourceId: error.resourceId,
+      stage: error.stage,
     });
   } else if (error instanceof StorageError) {
     res.status(500).json({
       error: 'Storage Error',
       message: error.message,
+      location: error.location,
     });
   } else if (error instanceof DatabaseError) {
     res.status(500).json({
       error: 'Database Error',
       message: error.message,
+    });
+  } else if (error instanceof ResourceError) {
+    res.status(500).json({
+      error: 'Resource Error',
+      message: error.message,
+      resourceType: error.resourceType,
+    });
+  } else if (error instanceof NetworkError) {
+    res.status(503).json({
+      error: 'Network Error',
+      message: error.message,
+      retryable: error.retryable,
     });
   } else if (error instanceof Error) {
     res.status(500).json({

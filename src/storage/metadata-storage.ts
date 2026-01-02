@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { DocumentMetadata, DatabaseError, NotFoundError } from '../types';
+import { ImageMetadata, DatabaseError, ProcessingConfig } from '../types.ts';
 
 /**
  * Metadata storage layer - simulates DynamoDB
@@ -8,7 +8,7 @@ import { DocumentMetadata, DatabaseError, NotFoundError } from '../types';
  */
 export class MetadataStorage {
   private readonly dbPath: string;
-  private cache: Map<string, DocumentMetadata> = new Map();
+  private cache: Map<string, ImageMetadata> = new Map();
   private initialized: boolean = false;
 
   constructor(dbPath: string = './data/metadata.json') {
@@ -33,8 +33,10 @@ export class MetadataStorage {
         for (const [id, metadata] of Object.entries(parsed)) {
           this.cache.set(id, {
             ...(metadata as any),
-            createdAt: new Date((metadata as any).createdAt),
-            updatedAt: new Date((metadata as any).updatedAt),
+            uploadedAt: new Date((metadata as any).uploadedAt),
+            processedAt: (metadata as any).processedAt
+              ? new Date((metadata as any).processedAt)
+              : undefined,
           });
         }
       } catch (error: any) {
@@ -53,26 +55,31 @@ export class MetadataStorage {
     }
   }
 
-  async save(metadata: DocumentMetadata): Promise<void> {
+  async save(metadata: ImageMetadata, config?: ProcessingConfig): Promise<void> {
     this.ensureInitialized();
+
+    // Inject metadata failure
+    if (config?.shouldFailMetadata) {
+      throw new DatabaseError('Simulated metadata save failure');
+    }
 
     try {
       this.cache.set(metadata.id, metadata);
       await this.persist();
     } catch (error) {
       throw new DatabaseError(
-        `Failed to save metadata for document ${metadata.id}`,
+        `Failed to save metadata for image ${metadata.id}`,
         error instanceof Error ? error : undefined
       );
     }
   }
 
-  async get(id: string): Promise<DocumentMetadata> {
+  async get(id: string): Promise<ImageMetadata> {
     this.ensureInitialized();
 
     const metadata = this.cache.get(id);
     if (!metadata) {
-      throw new NotFoundError(`Document not found: ${id}`, id);
+      throw new DatabaseError(`Image not found: ${id}`);
     }
 
     return metadata;
@@ -83,20 +90,20 @@ export class MetadataStorage {
 
     const existed = this.cache.delete(id);
     if (!existed) {
-      throw new NotFoundError(`Document not found: ${id}`, id);
+      throw new DatabaseError(`Image not found: ${id}`);
     }
 
     try {
       await this.persist();
     } catch (error) {
       throw new DatabaseError(
-        `Failed to delete metadata for document ${id}`,
+        `Failed to delete metadata for image ${id}`,
         error instanceof Error ? error : undefined
       );
     }
   }
 
-  async list(): Promise<DocumentMetadata[]> {
+  async list(): Promise<ImageMetadata[]> {
     this.ensureInitialized();
     return Array.from(this.cache.values());
   }

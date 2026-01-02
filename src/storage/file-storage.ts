@@ -1,9 +1,9 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { StorageError, NetworkError } from '../types';
+import { StorageError, NetworkError, ProcessingConfig } from '../types.ts';
 
 /**
- * File storage layer - simulates S3
+ * File storage layer - local file system storage
  * Notice the complex error handling, retry logic, and lack of composability
  */
 export class FileStorage {
@@ -27,21 +27,26 @@ export class FileStorage {
   }
 
   /**
-   * Save content to a file with retry logic
+   * Save file with retry logic
    * Notice how messy retry logic is without proper abstractions
    */
-  async saveFile(id: string, content: string): Promise<void> {
+  async saveFile(id: string, content: Buffer, config?: ProcessingConfig): Promise<void> {
+    // Inject storage failure
+    if (config?.shouldFailStorage) {
+      throw new StorageError('Simulated storage failure', 'file-system');
+    }
+
     const filePath = this.getFilePath(id);
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
         // Simulate potential network issues
-        if (Math.random() < 0.1 && attempt < 2) {
+        if (Math.random() < (config?.failureRate || 0.1) && attempt < 2) {
           throw new NetworkError('Simulated network failure');
         }
 
-        await fs.writeFile(filePath, content, 'utf-8');
+        await fs.writeFile(filePath, content);
         return; // Success!
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -71,7 +76,7 @@ export class FileStorage {
    * Read file with retry logic
    * More duplicated retry code - not DRY!
    */
-  async readFile(id: string): Promise<string> {
+  async readFile(id: string): Promise<Buffer> {
     const filePath = this.getFilePath(id);
     let lastError: Error | undefined;
 
@@ -89,7 +94,7 @@ export class FileStorage {
           throw new NetworkError('Simulated network failure');
         }
 
-        const content = await fs.readFile(filePath, 'utf-8');
+        const content = await fs.readFile(filePath);
         return content;
       } catch (error) {
         // Don't retry if file doesn't exist
@@ -141,7 +146,7 @@ export class FileStorage {
   }
 
   private getFilePath(id: string): string {
-    return path.join(this.basePath, `${id}.txt`);
+    return path.join(this.basePath, `${id}.jpg`);
   }
 
   private sleep(ms: number): Promise<void> {

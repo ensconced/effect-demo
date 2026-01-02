@@ -1,14 +1,18 @@
-# Effect TS Demo - Document Management Service
+# Effect TS Demo - Image Processing Service
 
-This demo showcases a simple Node.js service that manages documents with metadata and content storage. It's intentionally written **without Effect TS** to demonstrate the problems that Effect TS solves.
+This demo showcases a Node.js image processing service that's intentionally written **without Effect TS** to demonstrate the problems that Effect TS solves.
 
 ## What This Service Does
 
-A REST API for managing documents:
-- Create documents with title, content, author, and tags
-- Retrieve, update, and delete documents
-- List and search documents by tags
-- Simulates AWS services (S3 for content, DynamoDB for metadata)
+A REST API for processing images through a multi-stage pipeline:
+- Upload images and process them into multiple sizes
+- Resize (thumbnail, small, medium, large, original)
+- Optimize images for web
+- Store to local files, S3, and CDN
+- Save metadata to database
+- Built-in error injection for demonstrating failures
+
+**Pipeline**: Upload → Validate → Resize (4 sizes) → Optimize → File Storage → S3 → CDN → DB
 
 ## Running the Demo
 
@@ -25,32 +29,52 @@ The server will start on `http://localhost:3000`.
 ## API Endpoints
 
 ```bash
-# Create a document
-curl -X POST http://localhost:3000/api/documents \
+# Upload and process an image (with base64 encoding for demo)
+curl -X POST http://localhost:3000/api/images \
   -H "Content-Type: application/json" \
   -d '{
-    "title": "My Document",
-    "content": "Document content here",
-    "author": "John Doe",
-    "tags": ["demo", "typescript"]
+    "file": "'$(base64 -w 0 image.jpg)'",
+    "originalName": "vacation.jpg",
+    "mimeType": "image/jpeg",
+    "userId": "user123",
+    "tags": ["vacation", "2024"]
   }'
 
-# Get a document
-curl http://localhost:3000/api/documents/{id}
+# Get image metadata
+curl http://localhost:3000/api/images/{id}
 
-# List all documents
-curl http://localhost:3000/api/documents
+# List all images
+curl http://localhost:3000/api/images
 
-# Search by tag
-curl http://localhost:3000/api/documents?tag=demo
+# Delete image
+curl -X DELETE http://localhost:3000/api/images/{id}
+```
 
-# Update a document
-curl -X PUT http://localhost:3000/api/documents/{id} \
-  -H "Content-Type: application/json" \
-  -d '{"title": "Updated Title"}'
+## Error Injection System
 
-# Delete a document
-curl -X DELETE http://localhost:3000/api/documents/{id}
+The demo includes built-in error injection via query parameters to demonstrate failure scenarios:
+
+```bash
+# Trigger validation error
+curl -X POST "http://localhost:3000/api/images?fail=validation" ...
+
+# Fail during resize (all sizes)
+curl -X POST "http://localhost:3000/api/images?fail=resize" ...
+
+# Partial resize failure (2/4 sizes fail) - demonstrates Promise.allSettled complexity
+curl -X POST "http://localhost:3000/api/images?fail=resize-partial" ...
+
+# Fail S3 upload - demonstrates rollback complexity
+curl -X POST "http://localhost:3000/api/images?fail=s3" ...
+
+# Fail CDN publish - demonstrates partial success cleanup
+curl -X POST "http://localhost:3000/api/images?fail=cdn" ...
+
+# Multiple failures
+curl -X POST "http://localhost:3000/api/images?fail=storage,cdn" ...
+
+# Random failure rate (30% chance)
+curl -X POST "http://localhost:3000/api/images?failureRate=0.3" ...
 ```
 
 ---
@@ -59,226 +83,197 @@ curl -X DELETE http://localhost:3000/api/documents/{id}
 
 ### 1. **Complex Error Handling**
 
-**Location**: `src/services/document-service.ts`, `src/storage/file-storage.ts`
+**Location**: `src/services/image-service.ts:66-340`
 
 **Problem**:
-- Error handling is scattered across try-catch blocks
-- Different error types require different handling strategies
-- No composable way to handle errors
+- 5+ levels of nested try-catch blocks
+- Manual state tracking for rollback (fileStorageSaved, s3Uploaded, etc.)
 - instanceof checks everywhere
+- Errors lose context as they bubble up
 
 ```typescript
-// Example from document-service.ts
+// Example from image-service.ts
+let fileStorageSaved = false;
+let s3Uploaded = false;
+let cdnPublished = false;
+
 try {
-  await this.fileStorage.saveFile(id, validatedInput.content);
-  fileSaved = true;
-  await this.metadataStorage.save(metadata);
-  metadataSaved = true;
-  return {...};
+  await saveFile();
+  fileStorageSaved = true;
+  await uploadToS3();
+  s3Uploaded = true;
+  await publishToCDN();  // If this fails...
+  cdnPublished = true;
 } catch (error) {
-  // Manual rollback logic
-  if (fileSaved && !metadataSaved) {
-    try {
-      await this.fileStorage.deleteFile(id);
-    } catch (rollbackError) {
-      // What do we do here?
-    }
-  }
+  // MANUAL ROLLBACK - what if THIS fails?
+  if (s3Uploaded) await deleteFromS3();
+  if (fileStorageSaved) await deleteFile();
   throw error;
 }
 ```
 
-**Effect TS Solution**: Effect provides typed errors as first-class citizens with composable error handling using `Effect.catchTag`, `Effect.catchAll`, etc.
+**Effect TS Solution**: Typed errors with `Effect.catchTag`, automatic resource cleanup with `Effect.acquireRelease`.
 
-### 2. **Difficult Transaction Management**
+### 2. **Transaction Management Nightmare**
 
-**Location**: `src/services/document-service.ts:46-85` (createDocument), `src/services/document-service.ts:115-161` (updateDocument)
+**Location**: `src/services/image-service.ts:135-250` (processImage method)
 
 **Problem**:
-- Operations span multiple storage systems (files + metadata)
-- Partial failures leave the system in inconsistent state
-- Manual rollback logic is complex and error-prone
-- Rollbacks themselves can fail!
+- Operations span 4 systems: File Storage, S3, CDN, Database
+- No transactional guarantees across systems
+- Partial failures leave orphaned resources
+- Rollback logic is 50+ lines and can itself fail
+- If rollback fails, system is in inconsistent state
 
 ```typescript
-// If metadata save fails after file save succeeds:
-let fileSaved = false;
-try {
-  await this.fileStorage.saveFile(id, content);
-  fileSaved = true;
-  await this.metadataStorage.save(metadata); // What if this fails?
-} catch (error) {
-  if (fileSaved) {
-    // Try to rollback, but what if THIS fails?
-    await this.fileStorage.deleteFile(id);
-  }
-}
+// If CDN publish fails after S3 upload succeeds:
+// - File is in S3 (costs money, takes space)
+// - No CDN URL (users can't access it)
+// - Metadata shows it exists (but it's broken)
+// - Temp files might not be cleaned up
 ```
 
-**Effect TS Solution**: Effect's resource management with `Effect.acquireRelease` and STM (Software Transactional Memory) for composable transactions.
+**Demo**: `POST /api/images?fail=cdn` - watch the rollback attempt in logs
 
-### 3. **Non-composable Retry Logic**
+**Effect TS Solution**: Composable resource management, STM for transactions, guaranteed cleanup.
 
-**Location**: `src/storage/file-storage.ts:30-61`, `src/storage/file-storage.ts:68-102`
+### 3. **Duplicated Retry Logic**
+
+**Location**:
+- `src/storage/file-storage.ts:33-73`
+- `src/storage/s3-storage.ts:36-76`
+- `src/storage/cdn-publisher.ts:33-77`
 
 **Problem**:
-- Retry logic is duplicated in multiple places
-- Hard-coded retry parameters (max attempts, delays)
-- Exponential backoff implemented manually
-- Can't easily change retry strategy
+- Same retry pattern copied 3 times
+- Hard-coded parameters (max retries, delays)
+- Manual exponential backoff calculation
+- No jitter, circuit breakers, or retry budgets
+- Can't easily swap strategies
 
 ```typescript
-// Duplicated in saveFile and readFile
-for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+// This pattern appears in 3 files:
+for (let attempt = 0; attempt <= maxRetries; attempt++) {
   try {
-    // operation
+    await operation();
     return;
   } catch (error) {
-    const delay = this.retryDelayMs * Math.pow(2, attempt);
-    await this.sleep(delay);
+    const delay = baseDelay * Math.pow(2, attempt);
+    await sleep(delay);
   }
 }
 ```
 
-**Effect TS Solution**: `Effect.retry` with composable retry policies like `Schedule.exponential`, `Schedule.spaced`, etc.
+**Demo**: Watch retry logs when running with `?failureRate=0.3`
 
-### 4. **Hard-coded Dependencies**
+**Effect TS Solution**: `Effect.retry` with `Schedule.exponential`, composable retry policies.
 
-**Location**: `src/index.ts:18-21`, `src/services/document-service.ts:26-30`
+### 4. **Parallel Operations Complexity**
 
-**Problem**:
-- Dependencies are manually wired in constructor
-- Difficult to test (need to mock every dependency)
-- No dependency injection framework
-- Initialization order must be managed manually
-
-```typescript
-// Manual dependency wiring
-const fileStorage = new FileStorage('./data/files');
-const metadataStorage = new MetadataStorage('./data/metadata.json');
-const documentService = new DocumentService(fileStorage, metadataStorage);
-```
-
-**Effect TS Solution**: Effect's `Layer` system provides dependency injection with type-safe requirements and automatic initialization.
-
-### 5. **Validation Boilerplate**
-
-**Location**: `src/validation.ts`
+**Location**: `src/processing/image-processor.ts:46-93` (resizeToAllSizes)
 
 **Problem**:
-- 100+ lines of manual validation code
-- Repetitive null/undefined checks
-- Manual type narrowing
-- Error messages must be manually maintained
+- Need to resize 4 sizes in parallel for performance
+- Promise.allSettled gives results, but interpretation is manual
+- Partial success handling is complex (2/4 succeed - now what?)
+- Need to clean up successful results if overall operation fails
 
 ```typescript
-if (!input.title || typeof input.title !== 'string') {
-  throw new ValidationError('Title is required and must be a string', 'title');
-}
-if (input.title.trim().length === 0) {
-  throw new ValidationError('Title cannot be empty', 'title');
-}
-// ... repeat for every field
-```
+const results = await Promise.allSettled([...resize operations...]);
 
-**Effect TS Solution**: `@effect/schema` provides declarative validation with automatic type inference and error messages.
-
-### 6. **Imperative State Management**
-
-**Location**: `src/storage/metadata-storage.ts`
-
-**Problem**:
-- Manual state tracking (`initialized` flag)
-- Must remember to call `initialize()` before use
-- No compile-time guarantees about initialization
-- Mutable state (`Map`) requires careful management
-
-```typescript
-private initialized: boolean = false;
-
-private ensureInitialized(): void {
-  if (!this.initialized) {
-    throw new Error('Not initialized');
+// Now manually check each result
+for (let i = 0; i < results.length; i++) {
+  if (results[i].status === 'fulfilled') {
+    succeeded.push(results[i].value);
+  } else {
+    failed.push(results[i].reason);
   }
 }
+
+// What do we do with partial success?
+if (failed.length > 0) {
+  // Clean up the ones that succeeded!
+  await cleanup(succeeded);
+  throw new Error(...);
+}
 ```
 
-**Effect TS Solution**: Effect encourages functional patterns and provides `Ref` for managed state.
+**Demo**: `POST /api/images?fail=resize-partial` - 2/4 sizes fail
 
-### 7. **Poor Composability**
+**Effect TS Solution**: `Effect.all` with different modes (validate, either), built-in error collection.
 
-**Problem**: Operations can't be easily combined, transformed, or reused.
+### 5. **Resource Leaks**
 
-```typescript
-// Want to add logging? Need to modify every function
-// Want to add metrics? Need to modify every function
-// Want to add tracing? Need to modify every function
-```
-
-**Effect TS Solution**: Effect's functional composition allows adding cross-cutting concerns without modifying code.
-
-### 8. **No Type-safe Resource Management**
-
-**Location**: Throughout the codebase
+**Location**: `src/processing/image-processor.ts`
 
 **Problem**:
-- File handles, connections must be manually closed
-- Easy to leak resources
-- No compile-time guarantees about cleanup
+- Temp files created during processing
+- If errors occur, cleanup might not happen
+- No compile-time guarantee of cleanup
+- Cleanup itself can fail (what then?)
 
-**Effect TS Solution**: `Effect.acquireRelease` ensures resources are properly cleaned up even when errors occur.
+**Demo**:
+```bash
+# Upload with CDN failure 5 times
+for i in {1..5}; do
+  curl -X POST "http://localhost:3000/api/images?fail=cdn" -d '...'
+done
 
-### 9. **Testing Difficulties**
+# Check temp files
+ls -la data/temp  # Orphaned files!
+```
 
-**Problem**:
-- Hard to test error cases
-- Need to mock multiple dependencies
-- No easy way to test retry logic
-- Difficult to test partial failure scenarios
+**Effect TS Solution**: `Effect.acquireRelease` guarantees cleanup even on errors.
 
-**Effect TS Solution**: Effect's testable runtime allows deterministic testing of complex scenarios.
+### 6. **Non-composable Code**
 
----
+**Problem**: Want to add logging? Metrics? Tracing? Timeouts? Circuit breakers?
 
-## 🟢 How Effect TS Would Improve This
-
-Here's a preview of what the same service would look like with Effect TS:
+Must modify every function manually. No way to compose cross-cutting concerns.
 
 ```typescript
-// Declarative validation with Schema
-const CreateDocumentSchema = Schema.struct({
-  title: Schema.string.pipe(Schema.nonEmpty(), Schema.maxLength(200)),
-  content: Schema.string.pipe(Schema.nonEmpty()),
-  author: Schema.string.pipe(Schema.nonEmpty()),
-  tags: Schema.array(Schema.string).pipe(Schema.optional)
-});
-
-// Composable retry logic
-const withRetry = Effect.retry(Schedule.exponential("100 millis").pipe(
-  Schedule.compose(Schedule.recurs(3))
-));
-
-// Type-safe dependency injection
-class DocumentService extends Effect.Service<DocumentService>()("DocumentService", {
-  effect: Effect.gen(function* (_) {
-    const fileStorage = yield* _(FileStorage);
-    const metadataStorage = yield* _(MetadataStorage);
-
-    return {
-      createDocument: (input) => Effect.gen(function* (_) {
-        const validated = yield* _(Schema.decode(CreateDocumentSchema)(input));
-        // Automatic transaction management, typed errors, composable operations
-      })
-    };
-  })
-}) {}
-
-// Resource management
-const useFileStorage = Effect.acquireRelease(
-  openFile(path),
-  (file) => closeFile(file)
-);
+// Adding timeout requires modifying every async operation:
+const result = await Promise.race([
+  operation(),
+  timeout(5000)
+]);
 ```
+
+**Effect TS Solution**: `Effect.timeout`, `Effect.tap`, `Effect.withSpan` - compose at use site.
+
+### 7. **Hard-coded Dependencies**
+
+**Location**: `src/index.ts:30-42`
+
+**Problem**:
+- Manual dependency wiring
+- Initialization order matters (implicit, not explicit)
+- Testing requires mocking every dependency
+- Can't easily swap implementations
+
+```typescript
+// Hard-coded dependency tree
+const processor = new ImageProcessor();
+const storage = new FileStorage();
+const s3 = new S3Storage();
+const cdn = new CDNPublisher();
+const db = new MetadataStorage();
+const service = new ImageService(processor, storage, s3, cdn, db);
+```
+
+**Effect TS Solution**: `Layer` system with automatic dependency injection.
+
+### 8. **Validation Boilerplate**
+
+**Location**: `src/validation.ts` (150+ lines)
+
+**Problem**:
+- Manual null checks, type checks, range checks
+- Repetitive error messages
+- No automatic type inference
+- Hard to compose validators
+
+**Effect TS Solution**: `@effect/schema` - declarative validation with automatic types.
 
 ---
 
@@ -286,39 +281,62 @@ const useFileStorage = Effect.acquireRelease(
 
 ```
 src/
-├── index.ts              # Application entry point
-├── types.ts              # Domain types and error classes
-├── validation.ts         # Manual validation logic (100+ lines!)
+├── index.ts                      # App entry point (manual DI)
+├── types.ts                      # Domain types + error classes
+├── validation.ts                 # Manual validation (150+ lines!)
 ├── api/
-│   └── routes.ts         # Express routes with error handling
+│   └── routes.ts                 # Express routes + error injection
 ├── services/
-│   └── document-service.ts   # Business logic with complex error handling
+│   └── image-service.ts          # Main pipeline orchestration (300+ lines!)
+├── processing/
+│   └── image-processor.ts        # Resize + optimize logic
 └── storage/
-    ├── file-storage.ts       # File operations with retry logic
-    └── metadata-storage.ts   # Metadata persistence
+    ├── file-storage.ts           # Local file operations
+    ├── s3-storage.ts             # S3 simulation
+    ├── cdn-publisher.ts          # CDN simulation
+    └── metadata-storage.ts       # Database simulation
 ```
-
-## Next Steps
-
-After reviewing these pain points, the next phase will:
-1. Refactor this service using Effect TS
-2. Show side-by-side comparisons
-3. Demonstrate Effect's solutions to each pain point
-4. Add AWS integration (real DynamoDB and S3)
 
 ---
 
-## Key Takeaways for Your Presentation
+## For Presentation
 
-1. **Error handling complexity grows exponentially** with system complexity
-2. **Transaction management** across multiple systems is extremely difficult without proper abstractions
-3. **Retry logic** is repetitive and easy to get wrong
-4. **Testing** complex async code with errors is painful
-5. **Type safety** doesn't help with effects (errors, async, dependencies)
+See `PRESENTATION.md` for the complete presentation plan including:
+- Step-by-step demonstration script
+- Error injection scenarios
+- Live refactoring guide to Effect TS
+- Talking points for each pain point
+- Before/after code comparisons
 
-Effect TS provides a **functional programming foundation** that makes all of these problems manageable through:
-- Typed errors as first-class values
-- Composable operations
-- Declarative dependency injection
-- Built-in retry/timeout/circuit breaker patterns
-- Resource-safe programming
+---
+
+## Key Statistics
+
+- **Error handling code**: ~40% of codebase
+- **Retry logic duplication**: 3 copies
+- **Manual state tracking**: 7 boolean flags
+- **Try-catch blocks**: 20+
+- **Lines of validation**: 150+
+- **Rollback logic**: 80 lines (can itself fail!)
+
+---
+
+## Next Steps
+
+This vanilla implementation serves as the "before" state. The next phase will:
+1. Refactor to Effect TS (live during presentation)
+2. Show side-by-side comparisons
+3. Demonstrate Effect's solutions to each pain point
+4. Add real AWS integration (optional)
+
+---
+
+## Key Takeaways
+
+1. **Error handling complexity** grows exponentially with system complexity
+2. **Distributed transactions** are extremely difficult without proper abstractions
+3. **Retry logic** is easy to get wrong and hard to maintain
+4. **Resource safety** requires discipline (and is easy to mess up)
+5. **Type safety alone** doesn't help with effects
+
+**Effect TS provides**: Typed errors, composable operations, automatic resource management, declarative retries, dependency injection, and much more.
