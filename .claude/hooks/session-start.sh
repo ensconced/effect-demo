@@ -26,6 +26,10 @@ fi
 # Ensure /usr/local/bin is at the front of PATH
 export PATH="/usr/local/bin:$PATH"
 
+# Persist PATH to profile so it's available in the Claude Code session
+echo 'export PATH="/usr/local/bin:$PATH"' > /etc/profile.d/node-path.sh
+chmod +x /etc/profile.d/node-path.sh
+
 # Check if the correct Node version is already installed in /usr/local/bin
 if [ -f "/usr/local/bin/node" ] && [ "$(/usr/local/bin/node --version)" = "v${NODE_VERSION}" ]; then
     echo "✓ Node.js v${NODE_VERSION} already installed"
