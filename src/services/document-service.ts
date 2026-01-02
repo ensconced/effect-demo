@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
-import { FileStorage } from '../storage/file-storage';
-import { MetadataStorage } from '../storage/metadata-storage';
+import { FileStorage } from '../storage/file-storage.ts';
+import { MetadataStorage } from '../storage/metadata-storage.ts';
 import {
   Document,
   DocumentMetadata,
@@ -9,8 +9,8 @@ import {
   StorageError,
   DatabaseError,
   NotFoundError,
-} from '../types';
-import { validateCreateDocumentInput, validateUpdateDocumentInput, validateDocumentId } from '../validation';
+} from '../types.ts';
+import { validateCreateDocumentInput, validateUpdateDocumentInput, validateDocumentId } from '../validation.ts';
 
 /**
  * Document Service - orchestrates file and metadata storage

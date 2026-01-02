@@ -1,8 +1,11 @@
 import express from 'express';
-import { FileStorage } from './storage/file-storage';
-import { MetadataStorage } from './storage/metadata-storage';
-import { DocumentService } from './services/document-service';
-import { createRouter } from './api/routes';
+import { ImageProcessor } from './processing/image-processor.ts';
+import { FileStorage } from './storage/file-storage.ts';
+import { S3Storage } from './storage/s3-storage.ts';
+import { CDNPublisher } from './storage/cdn-publisher.ts';
+import { MetadataStorage } from './storage/metadata-storage.ts';
+import { ImageService } from './services/image-service.ts';
+import { createRouter } from './api/routes.ts';
 
 /**
  * Main application entry point
@@ -17,22 +20,34 @@ import { createRouter } from './api/routes';
 const PORT = process.env.PORT || 3000;
 
 async function main() {
-  console.log('Starting document service...');
+  console.log('Starting image processing service...\n');
 
-  // Manually wire up dependencies
-  // Notice: order matters! We need to initialize storage before service
+  // ============================================================
+  // MANUAL DEPENDENCY WIRING
+  // Notice: We're manually creating 5 dependencies
+  // Order matters! Testing this is painful!
+  // ============================================================
+  const imageProcessor = new ImageProcessor('./data/temp');
   const fileStorage = new FileStorage('./data/files');
+  const s3Storage = new S3Storage('./data/s3');
+  const cdnPublisher = new CDNPublisher('https://cdn.example.com');
   const metadataStorage = new MetadataStorage('./data/metadata.json');
 
-  const documentService = new DocumentService(fileStorage, metadataStorage);
+  const imageService = new ImageService(
+    imageProcessor,
+    fileStorage,
+    s3Storage,
+    cdnPublisher,
+    metadataStorage
+  );
 
   // Initialize everything
   // What if initialization fails? We need to handle it manually
   try {
-    await documentService.initialize();
-    console.log('Document service initialized');
+    await imageService.initialize();
+    console.log('✓ Image service initialized\n');
   } catch (error) {
-    console.error('Failed to initialize document service:', error);
+    console.error('Failed to initialize image service:', error);
     process.exit(1);
   }
 
@@ -40,20 +55,21 @@ async function main() {
   const app = express();
 
   // Middleware
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' })); // Large limit for base64 images
 
   // Request logging middleware
   app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${req.method} ${req.path}`);
     next();
   });
 
   // Routes
-  app.use('/api', createRouter(documentService));
+  app.use('/api', createRouter(imageService));
 
   // Health check
   app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.json({ status: 'ok', service: 'image-processing' });
   });
 
   // Global error handler
@@ -65,9 +81,18 @@ async function main() {
 
   // Start server
   app.listen(PORT, () => {
+    console.log(`\n========================================`);
+    console.log(`Image Processing Service`);
+    console.log(`========================================`);
     console.log(`Server running on port ${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);
     console.log(`API base URL: http://localhost:${PORT}/api`);
+    console.log(`\nError Injection Examples:`);
+    console.log(`  POST /api/images?fail=validation`);
+    console.log(`  POST /api/images?fail=resize-partial`);
+    console.log(`  POST /api/images?fail=cdn`);
+    console.log(`  POST /api/images?fail=storage,cdn`);
+    console.log(`========================================\n`);
   });
 }
 
