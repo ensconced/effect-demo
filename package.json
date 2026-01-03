@@ -5,7 +5,18 @@
   "description": "Demo showing problems Effect TS solves",
   "main": "src/index.ts",
   "scripts": {
-    "start": "/usr/local/bin/node --experimental-transform-types src/index.ts"
+    "start": "/usr/local/bin/node --experimental-transform-types src/index.ts",
+    "example:01-errors-traditional": "/usr/local/bin/node --experimental-transform-types examples/01-errors/traditional.ts",
+    "example:01-errors-effect": "/usr/local/bin/node --experimental-transform-types examples/01-errors/effect.ts",
+    "example:02-resilience-traditional": "/usr/local/bin/node --experimental-transform-types examples/02-resilience/traditional.ts",
+    "example:02-resilience-effect": "/usr/local/bin/node --experimental-transform-types examples/02-resilience/effect.ts",
+    "example:03-resources-traditional": "/usr/local/bin/node --experimental-transform-types examples/03-resources/traditional.ts",
+    "example:03-resources-effect": "/usr/local/bin/node --experimental-transform-types examples/03-resources/effect.ts",
+    "example:04-concurrency-traditional": "/usr/local/bin/node --experimental-transform-types examples/04-concurrency/traditional.ts",
+    "example:04-concurrency-effect": "/usr/local/bin/node --experimental-transform-types examples/04-concurrency/effect.ts",
+    "example:05-dependency-injection": "/usr/local/bin/node --experimental-transform-types examples/05-dependency-injection/effect.ts",
+    "example:06-schema-validation": "/usr/local/bin/node --experimental-transform-types examples/06-schema-validation/effect.ts",
+    "example:07-fiber-management": "/usr/local/bin/node --experimental-transform-types examples/07-fiber-management/effect.ts"
   },
   "keywords": [
     "effect",
