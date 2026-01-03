@@ -332,6 +332,3 @@ export async function runExample() {
   console.log('\n⚠️  Note: Some operations might still be running in the background!');
 }
 
-if (import.meta.main) {
-  runExample();
-}

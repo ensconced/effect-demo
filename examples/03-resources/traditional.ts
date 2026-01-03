@@ -275,6 +275,3 @@ export async function runExample() {
   console.log('\n⚠️  Check for resource leaks - some resources might still be open!');
 }
 
-if (import.meta.main) {
-  runExample();
-}

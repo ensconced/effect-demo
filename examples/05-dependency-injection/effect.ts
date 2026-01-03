@@ -181,6 +181,3 @@ export const runTest = Effect.gen(function* () {
   console.log(`Test user: ${foundUser?.name}`);
 }).pipe(Effect.provide(AppTest));
 
-if (import.meta.main) {
-  Effect.runPromise(Effect.all([runExample, runTest]));
-}

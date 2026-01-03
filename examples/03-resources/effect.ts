@@ -291,6 +291,3 @@ export const runExample = Effect.gen(function* () {
   console.log('\n✅ All resources automatically cleaned up - no leaks possible!');
 });
 
-if (import.meta.main) {
-  Effect.runPromise(runExample);
-}

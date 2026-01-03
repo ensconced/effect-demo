@@ -349,6 +349,3 @@ export const runExample = Effect.gen(function* () {
   console.log('\n✅ All operations properly cleaned up - no orphaned fibers!');
 });
 
-if (import.meta.main) {
-  Effect.runPromise(runExample);
-}

@@ -111,6 +111,3 @@ export const runExample = Effect.gen(function* () {
   });
 });
 
-if (import.meta.main) {
-  Effect.runPromise(runExample);
-}

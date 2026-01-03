@@ -202,6 +202,3 @@ export async function runExample() {
   }
 }
 
-if (import.meta.main) {
-  runExample();
-}

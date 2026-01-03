@@ -231,6 +231,3 @@ export const runExample = Effect.gen(function* () {
   console.log('\n✅ Schema validation ensures runtime safety with compile-time types!');
 });
 
-if (import.meta.main) {
-  Effect.runPromise(runExample);
-}

@@ -290,6 +290,3 @@ export const runExample = Effect.gen(function* () {
   console.log('\n✅ All fiber operations completed with proper cleanup!');
 });
 
-if (import.meta.main) {
-  Effect.runPromise(runExample);
-}

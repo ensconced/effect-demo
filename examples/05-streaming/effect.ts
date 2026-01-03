@@ -387,6 +387,3 @@ export const runExample = Effect.gen(function* () {
   console.log('\n✅ All streaming operations completed with automatic resource management!');
 });
 
-if (import.meta.main) {
-  Effect.runPromise(runExample);
-}
